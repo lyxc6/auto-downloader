@@ -39,8 +39,7 @@ class ScanController(QObject):
         """创建扫描服务"""
         service = ScanService()
         
-        # 设置回调
-        service.on_item_found = lambda item: self.item_found.emit(item)
+        # 设置回调（on_item_found 在 start_scan 中按批次覆盖）
         service.on_error = lambda msg: self.scan_error.emit(msg)
         service.on_log = lambda msg, level: self.log_message.emit(msg, level)
         

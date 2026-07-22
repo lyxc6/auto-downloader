@@ -91,6 +91,7 @@ class Application:
         
         # 设置面板信号
         self.window.settingsPanel.theme_changed.connect(self.window._apply_theme)
+        self.window.settingsPanel.config_changed.connect(self._on_config_changed)
         self.window.closing.connect(self._on_app_closing)
     
     def _start_scan(self, url: str):
@@ -216,6 +217,22 @@ class Application:
         self.download_controller.cancel_download()
         self.scan_controller.close_service()
         self.download_controller.close_service()
+
+    def _on_config_changed(self, changes: dict):
+        """配置变更通知：设置已保存，下一批次下载/扫描生效"""
+        logger.info("配置已更改，下次操作生效: %s", changes)
+        try:
+            from qfluentwidgets import InfoBar, InfoBarPosition
+            InfoBar.success(
+                title="设置",
+                content="已保存，下次下载/扫描应用新设置",
+                parent=self.window,
+                position=InfoBarPosition.TOP,
+                duration=2000,
+            )
+        except Exception:
+            # InfoBar 在无可用父窗口时可能失败，忽略 UI 提示不影响配置保存
+            pass
     
     def run(self) -> int:
         """运行应用"""

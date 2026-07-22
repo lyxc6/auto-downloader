@@ -5,6 +5,7 @@ from PySide6.QtCore import Qt
 from qfluentwidgets import TreeWidget
 
 from ...models import DownloadItem, ItemType
+from ...utils.helpers import format_size
 
 
 class DownloadTreeWidget(TreeWidget):
@@ -29,7 +30,7 @@ class DownloadTreeWidget(TreeWidget):
         tree_item = QTreeWidgetItem()
         tree_item.setText(0, item.name)
         tree_item.setText(1, "📁" if item.is_dir else "📄")
-        tree_item.setText(2, self._format_size(item.size) if item.is_file else "")
+        tree_item.setText(2, format_size(item.size) if item.is_file else "")
         tree_item.setFlags(
             tree_item.flags() | Qt.ItemFlag.ItemIsUserCheckable
         )
@@ -129,17 +130,8 @@ class DownloadTreeWidget(TreeWidget):
     def collapse_all_items(self):
         """收起所有"""
         self.collapseAll()
-    
+
     def clear_all(self):
         """清空所有"""
         self.clear()
         self._items.clear()
-    
-    @staticmethod
-    def _format_size(size: int) -> str:
-        """格式化文件大小"""
-        for unit in ['B', 'KB', 'MB', 'GB']:
-            if size < 1024.0:
-                return f"{size:.1f} {unit}"
-            size /= 1024.0
-        return f"{size:.1f} TB"

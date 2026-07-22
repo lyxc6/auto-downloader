@@ -73,7 +73,8 @@ class DownloadItem:
     
     @classmethod
     def from_dict(cls, data: dict) -> 'DownloadItem':
-        """从字典创建"""
+        """从字典创建（不修改传入字典）"""
+        data = dict(data)
         data['status'] = DownloadStatus(data['status'])
         data['item_type'] = ItemType(data['item_type'])
         return cls(**data)

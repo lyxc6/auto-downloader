@@ -22,7 +22,6 @@ class ScanService:
         
         # 回调函数
         self.on_item_found: Optional[Callable[[DownloadItem], None]] = None
-        self.on_progress: Optional[Callable[[int, int], None]] = None
         self.on_error: Optional[Callable[[str], None]] = None
         self.on_log: Optional[Callable[[str, str], None]] = None
     
