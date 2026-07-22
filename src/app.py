@@ -2,8 +2,9 @@
 import logging
 import sys
 import signal
+import threading
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 
 from .utils.logger import setup_logging
 from .models import AppConfig, CacheManager
@@ -48,8 +49,12 @@ class Application:
         # 连接信号
         self._connect_signals()
         
-        # 设置信号处理（Ctrl+C）
+        # SIGINT 安全化：信号处理器只置位事件，由主线程定时器轮询处理
+        self._shutdown_event = threading.Event()
+        self._shutdown_done = False
+        self._shutdown_timer: QTimer = None
         signal.signal(signal.SIGINT, self._signal_handler)
+        self._start_shutdown_poller()
     
     def _connect_signals(self):
         """连接信号"""
@@ -177,11 +182,31 @@ class Application:
         logger.info("下载完成，缓存已保存")
     
     def _signal_handler(self, sig, frame):
-        """信号处理器"""
+        """信号处理器：只置位事件，不在信号上下文做 I/O 或退出"""
+        self._shutdown_event.set()
+
+    def _start_shutdown_poller(self):
+        """启动主线程定时器轮询退出事件（每 200ms）"""
+        self._shutdown_timer = QTimer(self.window)
+        self._shutdown_timer.setInterval(200)
+        self._shutdown_timer.timeout.connect(self._check_shutdown)
+        self._shutdown_timer.start()
+
+    def _check_shutdown(self):
+        """主线程回调：事件置位时保存缓存、关闭服务、退出应用（幂等）"""
+        if self._shutdown_done:
+            return
+        if not self._shutdown_event.is_set():
+            return
+        self._shutdown_done = True
+        if self._shutdown_timer is not None:
+            self._shutdown_timer.stop()
         logger.info("收到退出信号，保存缓存...")
         self.cache_manager.save(self.config.last_url)
+        self.scan_controller.close_service()
+        self.download_controller.close_service()
         logger.info("应用退出")
-        sys.exit(0)
+        self.app.quit()
     
     def _on_app_closing(self):
         """应用关闭前保存"""
