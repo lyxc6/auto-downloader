@@ -118,10 +118,46 @@ class ScanService:
         return items
     
     def get_total_pages(self, html: str) -> int:
-        """获取总页数"""
-        match = re.search(r'(\d+)/(\d+)', html)
-        if match:
-            return int(match.group(2))
+        """获取总页数
+
+        解析优先级：
+        1. 分页链接 ``?page=N`` 中的最大页码（最可靠）
+        2. 分页容器（class 含 pag/page）内的 ``N/M`` 文本
+        3. 含分页语义关键词（当前/第 ... 页）的 ``N/M`` 文本
+        4. 默认 1
+
+        避免误匹配正文中的日期、版本号、比例等任意 ``N/M``。
+        """
+        soup = BeautifulSoup(html, "html.parser")
+
+        # 1. 从分页链接提取最大页码
+        max_page = 1
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if "page=" in href:
+                m = re.search(r'[?&]page=(\d+)', href)
+                if m:
+                    p = int(m.group(1))
+                    if p > max_page:
+                        max_page = p
+        if max_page > 1:
+            return max_page
+
+        # 2. 从分页容器（class 含 pag/page）内的 N/M 提取
+        for el in soup.find_all(True):
+            cls = el.get("class") or []
+            cls_str = " ".join(cls).lower() if cls else ""
+            if "pag" in cls_str or "page" in cls_str:
+                m = re.search(r'(\d+)\s*/\s*(\d+)', el.get_text(" "))
+                if m:
+                    return int(m.group(2))
+
+        # 3. 含分页语义关键词的 N/M 文本回退
+        text = soup.get_text(" ")
+        m = re.search(r'(?:当前|第)\s*\d+\s*/\s*(\d+)', text)
+        if m:
+            return int(m.group(1))
+
         return 1
     
     def get_all_pages(
