@@ -22,15 +22,15 @@ class Application:
         setup_logging()
         logger.info("应用启动")
         
+        # 设置高DPI支持
+        QApplication.setHighDpiScaleFactorRoundingPolicy(
+            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+        )
+        
         # 创建QApplication
         self.app = QApplication(sys.argv)
         self.app.setApplicationName("网站文件自动下载器")
         self.app.setApplicationVersion("2.0.0")
-        
-        # 设置高DPI支持
-        self.app.setHighDpiScaleFactorRoundingPolicy(
-            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
-        )
         
         # 加载配置
         self.config = AppConfig.load()
