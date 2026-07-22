@@ -191,9 +191,10 @@ class Application:
     
     def _start_download(self):
         """开始下载"""
-        # 获取选中的文件
-        checked_files = self.cache_manager.get_checked_files()
-        
+        # 从目录树取勾选文件（tree_widget 自持 _all_items + _checked_set，
+        # 不依赖 cache_manager.tree_data，刷新期间也可靠）
+        checked_files = self.window.downloadPanel.tree_widget.get_checked_files()
+
         if not checked_files:
             from qfluentwidgets import InfoBar, InfoBarPosition
             InfoBar.warning(

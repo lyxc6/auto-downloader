@@ -183,6 +183,11 @@ class DownloadTreeWidget(TreeWidget):
         """获取所有选中项（O(1)，返回集合副本）"""
         return list(self._checked_set)
 
+    def get_checked_files(self) -> list:
+        """返回勾选的 DownloadItem 列表（从 _all_items + _checked_set，不依赖 cache_manager）"""
+        return [self._all_items[iid] for iid in self._checked_set
+                if iid in self._all_items and self._all_items[iid].is_file]
+
     def select_all(self):
         """全选：所有文件加入真值源，刷新已实现节点"""
         self._checked_set = {
