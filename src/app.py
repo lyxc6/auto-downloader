@@ -100,7 +100,7 @@ class Application:
         self.window.settingsPanel.config_changed.connect(self._on_config_changed)
         self.window.closing.connect(self._on_app_closing)
         
-        self.window.downloadPanel.tree_widget.set_check_sync_callback(self.cache_manager.set_checked_items)
+        self.window.downloadPanel.tree_widget.set_check_sync_callback(self._on_checked_changed)
     
     def _start_auto_save(self):
         self._auto_save_timer.start()
@@ -108,6 +108,14 @@ class Application:
     def _stop_auto_save_if_idle(self):
         if not self.scan_controller.is_scanning and not self.download_controller.is_downloading:
             self._auto_save_timer.stop()
+
+    def _on_checked_changed(self, checked_ids):
+        """勾选状态变化：同步到缓存并实时更新已选统计"""
+        self.cache_manager.set_checked_items(checked_ids)
+        stats = self.cache_manager.get_stats()
+        self.window.downloadPanel.update_stats(
+            stats['total_files'], stats['total_dirs'], stats['checked_count']
+        )
     
     def _start_scan(self, url: str):
         """开始扫描"""
