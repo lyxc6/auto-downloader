@@ -1,8 +1,10 @@
 """下载服务"""
+import copy
 import logging
 import os
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 from typing import Callable, Optional
 from ..models import DownloadItem, DownloadStatus, DownloadStats
@@ -227,34 +229,57 @@ class DownloadService:
         return False
     
     def download_batch(
-        self, 
-        items: list, 
+        self,
+        items: list,
         download_dir: str,
         on_all_complete: Optional[Callable] = None
     ) -> DownloadStats:
-        """批量下载"""
+        """批量下载（并发，并发度由 max_workers 控制）"""
         stats = DownloadStats()
         stats.total_files = len(items)
-        
+
         self.reset()
-        
-        for item in items:
-            if self.is_cancelled():
-                break
-            
-            success = self.download_file(item, download_dir)
-            
-            if success:
-                if item.status == DownloadStatus.COMPLETED:
-                    stats.completed += 1
-                elif item.status == DownloadStatus.SKIPPED:
-                    stats.skipped += 1
-            else:
-                stats.failed += 1
-        
+
+        # 每个 worker 操作 item 的深拷贝，避免与 GUI 线程共享状态撕裂读 (#10)
+        def worker(item: DownloadItem):
+            local_item = copy.deepcopy(item)
+            success = self.download_file(local_item, download_dir)
+            return item.item_id, success, local_item.status
+
+        completed = 0
+        failed = 0
+        skipped = 0
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
+            futures = [pool.submit(worker, it) for it in items]
+            for fut in as_completed(futures):
+                try:
+                    _item_id, success, status = fut.result()
+                except Exception as e:
+                    logger.error("下载任务异常: %s", e)
+                    failed += 1
+                    continue
+
+                if status == DownloadStatus.COMPLETED:
+                    completed += 1
+                elif status == DownloadStatus.SKIPPED:
+                    skipped += 1
+                else:
+                    failed += 1
+
+                # 取消：取消未启动的 future，运行中的由 download_file 内部检测退出
+                if self.is_cancelled():
+                    for f in futures:
+                        f.cancel()
+                    break
+
+        stats.completed = completed
+        stats.failed = failed
+        stats.skipped = skipped
+
         if on_all_complete:
             on_all_complete(stats)
-        
+
         return stats
     
     def close(self):
