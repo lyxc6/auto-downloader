@@ -120,10 +120,12 @@ class Application:
         if self.cache_manager.has_data_for(url):
             logger.info("使用缓存数据恢复目录树: %s", url)
             self.window.downloadPanel.clear_tree()
-            items = self.cache_manager.get_all_items()
-            for item in items:
-                self.window.downloadPanel.add_item(item)
-            self.window.downloadPanel.tree_widget.apply_checked_items(self.cache_manager.checked_items)
+            self.window.downloadPanel.tree_widget.load_from_items(
+                self.cache_manager.get_tree_data_snapshot()
+            )
+            self.window.downloadPanel.tree_widget.apply_checked_items(
+                self.cache_manager.checked_items
+            )
             stats = self.cache_manager.get_stats()
             self.window.downloadPanel.update_stats(
                 stats['total_files'], stats['total_dirs'], stats['checked_count']

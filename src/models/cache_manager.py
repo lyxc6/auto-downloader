@@ -125,6 +125,11 @@ class CacheManager:
                 self.tree_data.values(),
                 key=lambda item: (item.full_path or "").count("/")
             )
+
+    def get_tree_data_snapshot(self) -> dict:
+        """返回 tree_data 的浅拷贝 dict（item_id -> DownloadItem）"""
+        with self._lock:
+            return dict(self.tree_data)
     
     def add_item(self, item: DownloadItem):
         """添加项目"""
