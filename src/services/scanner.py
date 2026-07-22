@@ -53,11 +53,29 @@ class ScanService:
         for i in range(retries + 1):
             if self.is_cancelled():
                 return None
-            
+
             try:
                 resp = self.session.get(url, timeout=60)
+                resp.raise_for_status()
                 resp.encoding = "utf-8"
                 return resp.text
+            except requests.HTTPError as e:
+                status = e.response.status_code if e.response is not None else None
+                # 4xx: 页面不存在或无权限，终止该路径，不重试
+                if status is not None and 400 <= status < 500:
+                    logger.warning("获取页面失败(4xx): %s -> %s", url, status)
+                    if self.on_error:
+                        self.on_error(f"页面不存在或无权限: {status}")
+                    return None
+                # 5xx: 服务端错误，重试
+                if i < retries:
+                    logger.warning("获取页面重试 %d/%d: %s -> %s", i + 1, retries, url, e)
+                    time.sleep(2)
+                    continue
+                logger.error("获取页面失败: %s -> %s", url, e)
+                if self.on_error:
+                    self.on_error(f"获取页面失败: {e}")
+                return None
             except Exception as e:
                 if i < retries:
                     logger.warning("获取页面重试 %d/%d: %s -> %s", i + 1, retries, url, e)
