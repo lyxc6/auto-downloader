@@ -15,11 +15,16 @@ class DownloadTreeWidget(TreeWidget):
         super().__init__(parent)
         self._items = {}  # item_id -> QTreeWidgetItem
         self._updating = False
+        self._check_sync_cb = None
         self.setHeaderLabels(["名称", "类型", "大小"])
         self.setColumnWidth(0, 300)
         self.setColumnWidth(1, 80)
         self.setColumnWidth(2, 100)
         self.itemChanged.connect(self._on_item_changed)
+    
+    def set_check_sync_callback(self, cb):
+        """注册勾选状态实时同步回调（cb 接收 checked_ids 列表）"""
+        self._check_sync_cb = cb
     
     def add_item(self, item: DownloadItem):
         """添加项目"""
@@ -93,6 +98,8 @@ class DownloadTreeWidget(TreeWidget):
         self._cascade_check(item, checked)
         self._update_parent_state(item.parent())
         self._updating = False
+        if self._check_sync_cb:
+            self._check_sync_cb(self.get_checked_items())
     
     def _cascade_check(self, item, checked):
         """递归设置子节点勾选状态"""
@@ -130,6 +137,56 @@ class DownloadTreeWidget(TreeWidget):
     def collapse_all_items(self):
         """收起所有"""
         self.collapseAll()
+
+    def remove_item(self, item_id: str):
+        """增量修剪：移除指定节点及其所有后代（幂等，调用方按深度降序传入）"""
+        tree_item = self._items.get(item_id)
+        if tree_item is None:
+            return
+        
+        def _collect_descendant_ids(tw_item, acc):
+            for i in range(tw_item.childCount()):
+                child = tw_item.child(i)
+                cid = child.data(0, Qt.ItemDataRole.UserRole)
+                if cid is not None:
+                    acc.add(cid)
+                _collect_descendant_ids(child, acc)
+        
+        descendant_ids = set()
+        _collect_descendant_ids(tree_item, descendant_ids)
+        for did in descendant_ids:
+            self._items.pop(did, None)
+        
+        parent = tree_item.parent()
+        if parent is not None:
+            parent.removeChild(tree_item)
+        else:
+            idx = self.indexOfTopLevelItem(tree_item)
+            if idx >= 0:
+                self.takeTopLevelItem(idx)
+        
+        self._items.pop(item_id, None)
+
+    def recompute_parent_states(self):
+        """后序遍历整树，根据叶子节点状态重算所有非叶节点的三态"""
+        self._updating = True
+        try:
+            for item_id, tw_item in self._items.items():
+                if tw_item.childCount() == 0:
+                    self._update_parent_state(tw_item.parent())
+        finally:
+            self._updating = False
+
+    def apply_checked_items(self, checked_ids: set):
+        """按 checked_ids 批量设置勾选状态，并重算父节点三态（恢复场景）"""
+        self._updating = True
+        try:
+            for item_id, tw_item in self._items.items():
+                state = Qt.CheckState.Checked if item_id in checked_ids else Qt.CheckState.Unchecked
+                tw_item.setCheckState(0, state)
+            self.recompute_parent_states()
+        finally:
+            self._updating = False
 
     def clear_all(self):
         """清空所有"""

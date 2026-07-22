@@ -48,5 +48,5 @@ pyinstaller 自动下载器.spec
 
 - `downloader.py` globals (`BASE_URL`, `DOWNLOAD_DIR`, etc.) are mutated by CLI args—avoid importing and relying on defaults
 - GUI preview requires Pillow; gracefully degrades if missing
-- Auto-save timer runs every 30s during active scan/download operations
+- Auto-save timer saves cache every 30s during active scan/download; stops when both are idle. Refresh keeps checked items and prunes entries no longer present on the server (incremental, preserves expand/scroll state).
 - Signal handler (SIGINT) registered for emergency cache save on Ctrl+C

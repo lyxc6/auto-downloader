@@ -47,7 +47,7 @@ def test_check_shutdown_saves_and_quits_once(app_obj):
     """事件置位后 _check_shutdown 保存+关闭服务+退出，且只触发一次"""
     app_obj._shutdown_event.set()
     app_obj._check_shutdown()
-    app_obj.cache_manager.save.assert_called_once_with("http://x")
+    app_obj.cache_manager.save.assert_called_once_with()
     app_obj.scan_controller.close_service.assert_called_once()
     app_obj.download_controller.close_service.assert_called_once()
     app_obj.app.quit.assert_called_once()

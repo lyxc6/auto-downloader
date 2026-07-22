@@ -106,7 +106,7 @@ class ScanController(QObject):
                 self.log_message.emit("=" * 50, "header")
                 
                 # 保存缓存
-                self.cache_manager.save(url)
+                self.cache_manager.save()
                 
             except Exception as e:
                 logger.error("扫描失败", exc_info=True)

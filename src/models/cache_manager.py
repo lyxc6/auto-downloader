@@ -65,7 +65,10 @@ class CacheManager:
         """保存缓存"""
         try:
             with self._lock:
-                self.url = url
+                if url:
+                    self.url = url
+                else:
+                    url = self.url
                 data = {
                     "url": url,
                     "tree_data": {k: v.to_dict() for k, v in self.tree_data.items()},
@@ -89,6 +92,16 @@ class CacheManager:
             self.tree_data.clear()
             self.checked_items.clear()
             self.url = ""
+    
+    def clear_tree_data_only(self):
+        """仅清空 tree_data，保留 checked_items 和 url（用于刷新场景）"""
+        with self._lock:
+            self.tree_data.clear()
+    
+    def cleanup_checked(self):
+        """剔除 checked_items 中已不在 tree_data 里的失效 id"""
+        with self._lock:
+            self.checked_items &= set(self.tree_data.keys())
     
     def has_data_for(self, url: str) -> bool:
         """是否已有指定URL的缓存数据"""
