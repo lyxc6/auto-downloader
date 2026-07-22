@@ -77,8 +77,8 @@ class Application:
         download_panel.stop_download_btn.clicked.connect(self.download_controller.cancel_download)
         
         # 控制器信号
-        self.scan_controller.item_found.connect(
-            lambda item: self.window.downloadPanel.add_item(item)
+        self.scan_controller.items_found.connect(
+            lambda items: self.window.downloadPanel.add_items_batch(items)
         )
         self.scan_controller.log_message.connect(download_panel.add_log)
         self.scan_controller.scan_progress.connect(

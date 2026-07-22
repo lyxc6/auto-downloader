@@ -222,6 +222,10 @@ class DownloadPanel(QWidget):
     def add_item(self, item: DownloadItem):
         """添加目录树项目"""
         self.tree_widget.add_item(item)
+
+    def add_items_batch(self, items):
+        """批量添加目录树项目"""
+        self.tree_widget.add_items_batch(items)
     
     def clear_tree(self):
         """清空目录树"""

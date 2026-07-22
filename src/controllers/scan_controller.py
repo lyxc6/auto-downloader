@@ -1,6 +1,7 @@
 """扫描控制器"""
 import logging
 import threading
+from time import monotonic
 from typing import Optional
 from PySide6.QtCore import QObject, Signal, Slot
 
@@ -14,11 +15,11 @@ class ScanController(QObject):
     """扫描控制器"""
     
     # 信号定义
-    item_found = Signal(object)                # DownloadItem
-    scan_progress = Signal(int, int)           # current, total
-    scan_completed = Signal(int, int)          # files, dirs
-    scan_error = Signal(str)                   # error_message
-    log_message = Signal(str, str)             # message, level
+    items_found = Signal(list)               # List[DownloadItem]（批量）
+    scan_progress = Signal(int, int)         # current, total
+    scan_completed = Signal(int, int)        # files, dirs
+    scan_error = Signal(str)                 # error_message
+    log_message = Signal(str, str)           # message, level
     
     def __init__(self, config: AppConfig, cache_manager: CacheManager, parent=None):
         super().__init__(parent)
@@ -68,9 +69,13 @@ class ScanController(QObject):
                 
                 file_count = 0
                 dir_count = 0
+                buffer = []
+                last_flush = monotonic()
+                BATCH_SIZE = 50
+                FLUSH_INTERVAL = 0.1
                 
                 def on_item_found(item: DownloadItem):
-                    nonlocal file_count, dir_count
+                    nonlocal file_count, dir_count, last_flush, buffer
                     
                     # 添加到缓存
                     self.cache_manager.add_item(item)
@@ -80,11 +85,13 @@ class ScanController(QObject):
                     else:
                         dir_count += 1
                     
-                    # 发射信号
-                    self.item_found.emit(item)
+                    buffer.append(item)
                     
-                    # 发送进度
-                    self.scan_progress.emit(file_count, dir_count)
+                    if len(buffer) >= BATCH_SIZE or (monotonic() - last_flush) >= FLUSH_INTERVAL:
+                        self.items_found.emit(buffer)
+                        self.scan_progress.emit(file_count, dir_count)
+                        buffer = []
+                        last_flush = monotonic()
                 
                 # 设置回调
                 self._service.on_item_found = on_item_found
@@ -93,6 +100,12 @@ class ScanController(QObject):
                 items = self._service.scan_directory(
                     url, max_depth=max_depth
                 )
+                
+                # flush 剩余 buffer
+                if buffer:
+                    self.items_found.emit(buffer)
+                    self.scan_progress.emit(file_count, dir_count)
+                    buffer = []
                 
                 # 扫描完成
                 self.scan_completed.emit(file_count, dir_count)
