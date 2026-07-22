@@ -147,7 +147,7 @@ class Application:
         """开始下载"""
         # 从目录树同步勾选状态到缓存
         tree_checked = self.window.downloadPanel.tree_widget.get_checked_items()
-        self.cache_manager.checked_items = set(tree_checked)
+        self.cache_manager.set_checked_items(tree_checked)
         
         # 获取选中的文件
         checked_files = self.cache_manager.get_checked_files()

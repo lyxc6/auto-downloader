@@ -46,7 +46,8 @@ class CacheManager:
                         logger.warning("解析缓存项 %s 失败: %s", item_id, e)
             
             # 加载URL
-            self.url = data.get("url", "")
+            with self._lock:
+                self.url = data.get("url", "")
             
             # 加载checked_items
             checked_items = data.get("checked_items", [])
@@ -63,8 +64,8 @@ class CacheManager:
     def save(self, url: str = ""):
         """保存缓存"""
         try:
-            self.url = url
             with self._lock:
+                self.url = url
                 data = {
                     "url": url,
                     "tree_data": {k: v.to_dict() for k, v in self.tree_data.items()},
@@ -91,7 +92,18 @@ class CacheManager:
     
     def has_data_for(self, url: str) -> bool:
         """是否已有指定URL的缓存数据"""
-        return self.url == url and len(self.tree_data) > 0
+        with self._lock:
+            return self.url == url and len(self.tree_data) > 0
+
+    def set_checked_items(self, items) -> None:
+        """整体替换勾选集合（线程安全）"""
+        with self._lock:
+            self.checked_items = set(items)
+
+    def set_url(self, url: str) -> None:
+        """设置当前 URL（线程安全）"""
+        with self._lock:
+            self.url = url
     
     def get_all_items(self) -> list:
         """获取所有项目（用于恢复到目录树）"""
