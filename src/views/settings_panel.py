@@ -1,0 +1,230 @@
+"""设置面板"""
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QSpinBox
+from PySide6.QtCore import Qt, Signal
+
+from qfluentwidgets import (
+    CardWidget, SettingCardGroup,
+    SwitchSettingCard, ComboBoxSettingCard,
+    SettingCard, PushButton,
+    StrongBodyLabel, BodyLabel,
+    FluentIcon as FIF,
+    OptionsSettingCard,
+    Theme
+)
+from qfluentwidgets.common.config import OptionsConfigItem, OptionsValidator
+
+from ..models import AppConfig
+
+
+class SpinBoxSettingCard(SettingCard):
+    """自定义SpinBox设置卡片"""
+    
+    valueChanged = Signal(int)
+    
+    def __init__(self, min_val, max_val, step, icon, title, content=None, parent=None):
+        super().__init__(icon, title, content, parent)
+        self.spin_box = QSpinBox(self)
+        self.spin_box.setRange(min_val, max_val)
+        self.spin_box.setSingleStep(step)
+        self.spin_box.setMinimumWidth(120)
+        
+        self.hBoxLayout.addWidget(self.spin_box)
+        self.hBoxLayout.addSpacing(16)
+        
+        self.spin_box.valueChanged.connect(self.valueChanged.emit)
+    
+    def setValue(self, value):
+        self.spin_box.setValue(value)
+    
+    def value(self):
+        return self.spin_box.value()
+
+
+class FolderSettingCard(SettingCard):
+    """自定义文件夹设置卡片"""
+    
+    folderChanged = Signal(str)
+    
+    def __init__(self, default_folder, icon, title, content=None, parent=None):
+        super().__init__(icon, title, content, parent)
+        self.folder = default_folder
+        
+        self.folder_label = BodyLabel(default_folder, self)
+        self.folder_label.setMinimumWidth(200)
+        
+        self.contentLabel.hide()
+        self.hBoxLayout.addWidget(self.folder_label)
+        self.hBoxLayout.addSpacing(8)
+        
+        self.btn = PushButton("选择", self)
+        self.btn.clicked.connect(self._select_folder)
+        self.hBoxLayout.addWidget(self.btn)
+        self.hBoxLayout.addSpacing(16)
+    
+    def _select_folder(self):
+        from PySide6.QtWidgets import QFileDialog
+        folder = QFileDialog.getExistingDirectory(self, "选择下载目录", self.folder)
+        if folder:
+            self.folder = folder
+            self.folder_label.setText(folder)
+            self.folderChanged.emit(folder)
+    
+    def setFolder(self, folder):
+        self.folder = folder
+        self.folder_label.setText(folder)
+
+
+class SettingsPanel(QWidget):
+    """设置面板"""
+    
+    # 信号定义
+    theme_changed = Signal(str)
+    config_changed = Signal(dict)
+    
+    def __init__(self, config: AppConfig, parent=None):
+        super().__init__(parent)
+        self.setObjectName("settingsPanel")
+        self.config = config
+        self._setup_ui()
+    
+    def _setup_ui(self):
+        """设置UI"""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+        
+        # 标题
+        title = StrongBodyLabel("设置")
+        layout.addWidget(title)
+        
+        # 下载设置组
+        download_group = SettingCardGroup("下载设置", self)
+        
+        self.folder_card = FolderSettingCard(
+            self.config.download_dir,
+            FIF.DOWNLOAD,
+            "下载目录",
+            "设置文件保存位置",
+            self
+        )
+        
+        self.workers_card = SpinBoxSettingCard(
+            1, 10, 1,
+            FIF.PEOPLE,
+            "并发下载数",
+            "同时下载的文件数量",
+            self
+        )
+        self.workers_card.setValue(self.config.max_workers)
+        
+        self.retry_card = SpinBoxSettingCard(
+            0, 10, 1,
+            FIF.SYNC,
+            "重试次数",
+            "下载失败时的重试次数",
+            self
+        )
+        self.retry_card.setValue(self.config.retry_times)
+        
+        self.timeout_card = SpinBoxSettingCard(
+            30, 300, 10,
+            FIF.STOP_WATCH,
+            "超时时间(秒)",
+            "下载超时时间",
+            self
+        )
+        self.timeout_card.setValue(self.config.timeout)
+        
+        download_group.addSettingCard(self.folder_card)
+        download_group.addSettingCard(self.workers_card)
+        download_group.addSettingCard(self.retry_card)
+        download_group.addSettingCard(self.timeout_card)
+        
+        layout.addWidget(download_group)
+        
+        # 扫描设置组
+        scan_group = SettingCardGroup("扫描设置", self)
+        
+        self.depth_card = SpinBoxSettingCard(
+            1, 50, 1,
+            FIF.TILES,
+            "最大扫描深度",
+            "递归扫描的最大深度",
+            self
+        )
+        self.depth_card.setValue(self.config.max_depth)
+        
+        scan_group.addSettingCard(self.depth_card)
+        
+        layout.addWidget(scan_group)
+        
+        # 界面设置组
+        ui_group = SettingCardGroup("界面设置", self)
+        
+        self.themeConfigItem = OptionsConfigItem(
+            "theme", "themeMode", Theme.AUTO,
+            OptionsValidator([Theme.LIGHT, Theme.DARK, Theme.AUTO])
+        )
+        self.theme_card = OptionsSettingCard(
+            self.themeConfigItem,
+            FIF.PALETTE,
+            "主题",
+            "选择应用程序主题",
+            texts=["浅色", "深色", "跟随系统"],
+            parent=self
+        )
+        
+        theme_map = {"light": Theme.LIGHT, "dark": Theme.DARK, "auto": Theme.AUTO}
+        saved_theme = theme_map.get(self.config.theme, Theme.AUTO)
+        self.themeConfigItem.value = saved_theme
+        
+        ui_group.addSettingCard(self.theme_card)
+        
+        layout.addWidget(ui_group)
+        
+        layout.addStretch()
+        
+        # 连接信号
+        self._connect_signals()
+    
+    def _connect_signals(self):
+        """连接信号"""
+        self.folder_card.folderChanged.connect(self._on_folder_changed)
+        self.workers_card.valueChanged.connect(self._on_workers_changed)
+        self.retry_card.valueChanged.connect(self._on_retry_changed)
+        self.timeout_card.valueChanged.connect(self._on_timeout_changed)
+        self.depth_card.valueChanged.connect(self._on_depth_changed)
+        self.theme_card.optionChanged.connect(self._on_theme_changed)
+    
+    def _on_folder_changed(self, folder: str):
+        self.config.download_dir = folder
+        self.config.save()
+        self.config_changed.emit({"download_dir": folder})
+    
+    def _on_workers_changed(self, value: int):
+        self.config.max_workers = value
+        self.config.save()
+        self.config_changed.emit({"max_workers": value})
+    
+    def _on_retry_changed(self, value: int):
+        self.config.retry_times = value
+        self.config.save()
+        self.config_changed.emit({"retry_times": value})
+    
+    def _on_timeout_changed(self, value: int):
+        self.config.timeout = value
+        self.config.save()
+        self.config_changed.emit({"timeout": value})
+    
+    def _on_depth_changed(self, value: int):
+        self.config.max_depth = value
+        self.config.save()
+        self.config_changed.emit({"max_depth": value})
+    
+    def _on_theme_changed(self, configItem):
+        theme_value = configItem.value
+        theme_map = {Theme.LIGHT: "light", Theme.DARK: "dark", Theme.AUTO: "auto"}
+        theme = theme_map.get(theme_value, "auto")
+        self.config.theme = theme
+        self.config.save()
+        self.theme_changed.emit(theme)
