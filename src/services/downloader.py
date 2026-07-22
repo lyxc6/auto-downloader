@@ -64,68 +64,142 @@ class DownloadService:
         self._cancel_flag.clear()
         self._pause_flag.set()
     
+    def _get_remote_size_and_ranges(self, url: str):
+        """获取远端文件大小与是否支持 Range
+
+        Returns:
+            (content_length, accept_ranges) 或 (None, None)
+        """
+        try:
+            resp = self.session.head(url, timeout=self.timeout, allow_redirects=True)
+            # 部分服务器不支持 HEAD，回退到 GET
+            if resp.status_code in (405, 501):
+                resp = self.session.get(url, stream=True, timeout=self.timeout)
+                resp.raise_for_status()
+                cl = resp.headers.get("content-length")
+                ar = resp.headers.get("accept-ranges")
+                resp.close()
+                return (int(cl) if cl else None, ar)
+            resp.raise_for_status()
+            cl = resp.headers.get("content-length")
+            ar = resp.headers.get("accept-ranges")
+            return (int(cl) if cl else None, ar)
+        except Exception as e:
+            logger.debug("获取远端文件信息失败: %s -> %s", url, e)
+            return (None, None)
+
     def download_file(self, item: DownloadItem, download_dir: str) -> bool:
         """下载单个文件"""
         item_id = item.item_id
-        
+
         # 检查取消
         if self.is_cancelled():
             return False
-        
+
         # 等待暂停恢复
         self._pause_flag.wait()
-        
+
         # 构建本地路径
         local_path = os.path.join(download_dir, item.full_path)
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
-        
-        # 检查文件是否已存在
+
+        # 处理已存在文件：校验完整性，必要时续传/重下
+        resume_from = 0
         if os.path.exists(local_path):
-            size = os.path.getsize(local_path)
-            if size > 0:
-                item.status = DownloadStatus.SKIPPED
-                if self.on_status_changed:
-                    self.on_status_changed(item_id, DownloadStatus.SKIPPED)
-                return True
-        
+            local_size = os.path.getsize(local_path)
+            if local_size > 0:
+                remote_size, accept_ranges = self._get_remote_size_and_ranges(item.url)
+                if remote_size is None:
+                    # 无 Content-Length，无法校验，保持跳过
+                    item.size = local_size
+                    item.status = DownloadStatus.SKIPPED
+                    if self.on_status_changed:
+                        self.on_status_changed(item_id, DownloadStatus.SKIPPED)
+                    return True
+                if local_size == remote_size:
+                    # 完整，跳过
+                    item.size = local_size
+                    item.downloaded_size = local_size
+                    item.status = DownloadStatus.SKIPPED
+                    if self.on_status_changed:
+                        self.on_status_changed(item_id, DownloadStatus.SKIPPED)
+                    return True
+                if local_size < remote_size and accept_ranges and "bytes" in accept_ranges.lower():
+                    # 断点续传
+                    resume_from = local_size
+                    item.size = remote_size
+                    item.downloaded_size = resume_from
+                else:
+                    # 损坏(本地>远端)或不支持 Range，删除重下
+                    try:
+                        os.remove(local_path)
+                    except OSError:
+                        pass
+                    resume_from = 0
+
         # 开始下载
         item.status = DownloadStatus.DOWNLOADING
         if self.on_status_changed:
             self.on_status_changed(item_id, DownloadStatus.DOWNLOADING)
-        
+
         for attempt in range(self.retry_times + 1):
             if self.is_cancelled():
                 return False
-            
+
+            # 续传模式下，每次重试根据当前文件实际大小重新计算断点
+            if resume_from > 0 and os.path.exists(local_path):
+                resume_from = os.path.getsize(local_path)
+
             try:
+                headers = {}
+                mode = "wb"
+                start_downloaded = 0
+                if resume_from > 0:
+                    headers["Range"] = f"bytes={resume_from}-"
+                    mode = "ab"
+                    start_downloaded = resume_from
+
                 resp = self.session.get(
-                    item.url, 
-                    stream=True, 
-                    timeout=self.timeout
+                    item.url,
+                    stream=True,
+                    timeout=self.timeout,
+                    headers=headers,
                 )
                 resp.raise_for_status()
-                
-                # 获取文件大小
-                total_size = int(resp.headers.get("content-length", 0))
+
+                # 服务器忽略 Range 返回 200：覆盖重下
+                if resume_from > 0 and resp.status_code == 200:
+                    mode = "wb"
+                    start_downloaded = 0
+                    resume_from = 0
+
+                # 计算总大小
+                cl = int(resp.headers.get("content-length", 0))
+                if resp.status_code == 206 and start_downloaded > 0:
+                    total_size = cl + start_downloaded
+                elif cl > 0:
+                    total_size = cl
+                else:
+                    total_size = item.size
                 item.size = total_size
-                downloaded = 0
-                
-                with open(local_path, 'wb') as f:
+                downloaded = start_downloaded
+
+                with open(local_path, mode) as f:
                     for chunk in resp.iter_content(chunk_size=65536):
                         if self.is_cancelled():
                             f.close()
                             return False
-                        
+
                         self._pause_flag.wait()
-                        
+
                         if chunk:
                             f.write(chunk)
                             downloaded += len(chunk)
                             item.downloaded_size = downloaded
-                            
+
                             if self.on_progress:
                                 self.on_progress(item_id, downloaded, total_size)
-                
+
                 # 下载完成
                 item.status = DownloadStatus.COMPLETED
                 if self.on_status_changed:
@@ -133,13 +207,13 @@ class DownloadService:
                 if self.on_complete:
                     self.on_complete(item_id)
                 return True
-                
+
             except Exception as e:
                 if attempt < self.retry_times:
                     logger.warning("下载重试 %d/%d: %s -> %s", attempt + 1, self.retry_times, item.name, e)
                     time.sleep(2)
                     continue
-                
+
                 # 下载失败
                 logger.error("下载失败: %s -> %s", item.name, e)
                 item.status = DownloadStatus.FAILED
@@ -149,7 +223,7 @@ class DownloadService:
                 if self.on_error:
                     self.on_error(item_id, str(e))
                 return False
-        
+
         return False
     
     def download_batch(
