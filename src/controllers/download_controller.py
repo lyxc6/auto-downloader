@@ -100,18 +100,26 @@ class DownloadController(QObject):
             finally:
                 with self._lock:
                     self._is_downloading = False
-                if self._service:
-                    self._service.close()
-        
+                    if self._service is not None:
+                        self._service.close()
+                        self._service = None
+
         self._thread = threading.Thread(target=_download_worker, daemon=True)
         self._thread.start()
-    
+
     def cancel_download(self):
         """取消下载"""
         if self._service:
             self._service.cancel()
             logger.warning("用户取消下载")
             self.log_message.emit("正在取消下载...", "warning")
+
+    def close_service(self):
+        """关闭下载服务（线程安全，可在应用关闭时调用）"""
+        with self._lock:
+            if self._service is not None:
+                self._service.close()
+                self._service = None
     
     def pause_download(self):
         """暂停下载"""

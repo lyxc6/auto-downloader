@@ -116,15 +116,23 @@ class ScanController(QObject):
             finally:
                 with self._lock:
                     self._is_scanning = False
-                if self._service:
-                    self._service.close()
-        
+                    if self._service is not None:
+                        self._service.close()
+                        self._service = None
+
         self._thread = threading.Thread(target=_scan_worker, daemon=True)
         self._thread.start()
-    
+
     def cancel_scan(self):
         """取消扫描"""
         if self._service:
             self._service.cancel()
             logger.warning("用户取消扫描")
             self.log_message.emit("正在取消扫描...", "warning")
+
+    def close_service(self):
+        """关闭扫描服务（线程安全，可在应用关闭时调用）"""
+        with self._lock:
+            if self._service is not None:
+                self._service.close()
+                self._service = None

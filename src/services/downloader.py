@@ -34,12 +34,13 @@ class DownloadService:
     @property
     def session(self) -> requests.Session:
         """获取或创建session"""
-        if self._session is None:
-            self._session = requests.Session()
-            self._session.headers.update({
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            })
-        return self._session
+        with self._lock:
+            if self._session is None:
+                self._session = requests.Session()
+                self._session.headers.update({
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                })
+            return self._session
     
     def cancel(self):
         """取消下载"""
@@ -283,7 +284,8 @@ class DownloadService:
         return stats
     
     def close(self):
-        """关闭session"""
-        if self._session:
-            self._session.close()
-            self._session = None
+        """关闭session（原子，可重复调用）"""
+        with self._lock:
+            if self._session is not None:
+                self._session.close()
+                self._session = None

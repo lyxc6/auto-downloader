@@ -187,10 +187,10 @@ class Application:
         """应用关闭前保存"""
         logger.info("窗口关闭，保存缓存...")
         self.cache_manager.save(self.config.last_url)
-        if self.scan_controller._service:
-            self.scan_controller._service.close()
-        if self.download_controller._service:
-            self.download_controller._service.close()
+        self.scan_controller.cancel_scan()
+        self.download_controller.cancel_download()
+        self.scan_controller.close_service()
+        self.download_controller.close_service()
     
     def run(self) -> int:
         """运行应用"""
