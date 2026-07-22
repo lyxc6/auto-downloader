@@ -138,6 +138,7 @@ class Application:
             return
         
         self.window.downloadPanel.set_scanning(True)
+        self.window.downloadPanel.download_btn.setEnabled(False)
         self.window.downloadPanel.clear_tree()
         self.cache_manager.clear()
         self.cache_manager.set_url(url)
@@ -152,6 +153,7 @@ class Application:
         
         self.window.downloadPanel.log_widget.clear()
         self.window.downloadPanel.set_scanning(True)
+        self.window.downloadPanel.download_btn.setEnabled(False)
         # 不清空 UI 树，刷新期间旧树可见可操作
         self._refresh_old_ids = set(self.cache_manager.tree_data.keys())
         self.cache_manager.clear_tree_data_only()
