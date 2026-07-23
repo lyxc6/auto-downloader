@@ -36,6 +36,7 @@ class FakeService:
         self.on_item_found = None
         self.on_error = None
         self.on_log = None
+        self.on_dir_scanned = None
 
     def scan_directory(self, url, max_depth=10):
         for action in self.script:
@@ -49,6 +50,12 @@ class FakeService:
         pass
 
     def cancel(self):
+        pass
+
+    def is_cancelled(self):
+        return False
+
+    def set_scanned_dirs(self, dirs):
         pass
 
 
@@ -65,7 +72,10 @@ def make_controller(monkeypatch):
         config = type("C", (), {"max_depth": 5})()
         cache = type("C", (), {
             "add_item": lambda self, item: None,
+            "has_item": lambda self, item_id: False,
             "save": lambda self, url="": True,
+            "mark_dir_scanned": lambda self, dp: None,
+            "set_scan_complete": lambda self, complete: None,
         })()
         ctrl = ScanController(config, cache)
 

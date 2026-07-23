@@ -1,5 +1,6 @@
 """树形组件扩展"""
 from collections import deque
+from typing import Callable, Dict, List, Optional, Set
 from PySide6.QtWidgets import QTreeWidgetItem
 from PySide6.QtCore import Qt
 
@@ -14,13 +15,13 @@ class DownloadTreeWidget(TreeWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._items = {}            # item_id -> QTreeWidgetItem（已实现节点）
-        self._all_items = {}        # item_id -> DownloadItem（全量扁平字典）
-        self._children_index = {}   # parent_id -> [child_id, ...]（预建索引）
-        self._loaded = set()        # 已 populate 子节点的 item_id
-        self._checked_set = set()   # 勾选真值源（文件 item_id 集合）
+        self._items: Dict[str, QTreeWidgetItem] = {}            # item_id -> QTreeWidgetItem（已实现节点）
+        self._all_items: Dict[str, DownloadItem] = {}        # item_id -> DownloadItem（全量扁平字典）
+        self._children_index: Dict[str, List[str]] = {}   # parent_id -> [child_id, ...]（预建索引）
+        self._loaded: Set[str] = set()        # 已 populate 子节点的 item_id
+        self._checked_set: Set[str] = set()   # 勾选真值源（文件 item_id 集合）
         self._updating = False
-        self._check_sync_cb = None
+        self._check_sync_cb: Optional[Callable[[Set[str]], None]] = None
         self.setHeaderLabels(["名称", "类型", "大小"])
         self.setColumnWidth(0, 300)
         self.setColumnWidth(1, 80)
@@ -28,11 +29,11 @@ class DownloadTreeWidget(TreeWidget):
         self.itemChanged.connect(self._on_item_changed)
         self.itemExpanded.connect(self._on_item_expanded)
 
-    def set_check_sync_callback(self, cb):
+    def set_check_sync_callback(self, cb: Optional[Callable[[Set[str]], None]]) -> None:
         """注册勾选状态实时同步回调（cb 接收 checked_ids 集合）"""
         self._check_sync_cb = cb
 
-    def load_from_items(self, items_dict):
+    def load_from_items(self, items_dict: Dict[str, DownloadItem]) -> None:
         """一次性接收全量项，预建索引，仅 realize 根节点"""
         self.clear_all()
         self._all_items = dict(items_dict)
@@ -138,7 +139,7 @@ class DownloadTreeWidget(TreeWidget):
         finally:
             self._updating = False
 
-    def add_items_batch(self, items_list):
+    def add_items_batch(self, items_list: List[DownloadItem]) -> None:
         """批量添加（节流扫描信号路径）"""
         self._updating = True
         try:
@@ -179,11 +180,11 @@ class DownloadTreeWidget(TreeWidget):
             return tw.checkState(0) == Qt.CheckState.Checked
         return item_id in self._checked_set
 
-    def get_checked_items(self) -> list:
+    def get_checked_items(self) -> List[str]:
         """获取所有选中项（O(1)，返回集合副本）"""
         return list(self._checked_set)
 
-    def get_checked_files(self) -> list:
+    def get_checked_files(self) -> List[DownloadItem]:
         """返回勾选的 DownloadItem 列表（从 _all_items + _checked_set，不依赖 cache_manager）"""
         return [self._all_items[iid] for iid in self._checked_set
                 if iid in self._all_items and self._all_items[iid].is_file]
@@ -320,7 +321,7 @@ class DownloadTreeWidget(TreeWidget):
         finally:
             self._updating = False
 
-    def apply_checked_items(self, checked_ids):
+    def apply_checked_items(self, checked_ids: Set[str]) -> None:
         """按 checked_ids 设置真值源，并刷新已实现节点三态（恢复场景）"""
         self._checked_set = set(checked_ids)
         self._updating = True

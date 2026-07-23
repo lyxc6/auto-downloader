@@ -6,7 +6,7 @@ import threading
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, quote
-from typing import List, Tuple, Optional, Callable
+from typing import List, Tuple, Optional, Callable, Set, cast
 from ..models import DownloadItem, ItemType
 
 logger = logging.getLogger(__name__)
@@ -19,11 +19,13 @@ class ScanService:
         self._session: Optional[requests.Session] = None
         self._cancel_flag = threading.Event()
         self._lock = threading.Lock()
+        self._scanned_dirs: Set[str] = set()
         
         # 回调函数
         self.on_item_found: Optional[Callable[[DownloadItem], None]] = None
         self.on_error: Optional[Callable[[str], None]] = None
         self.on_log: Optional[Callable[[str, str], None]] = None
+        self.on_dir_scanned: Optional[Callable[[str], None]] = None
     
     @property
     def session(self) -> requests.Session:
@@ -47,6 +49,10 @@ class ScanService:
     def reset(self):
         """重置状态"""
         self._cancel_flag.clear()
+    
+    def set_scanned_dirs(self, dirs: Set[str]):
+        """设置已扫描目录集合（续扫时跳过这些目录）"""
+        self._scanned_dirs = set(dirs)
     
     def get_page(self, url: str, retries: int = 3) -> Optional[str]:
         """获取页面内容"""
@@ -93,14 +99,14 @@ class ScanService:
             List of (type, name, href)
         """
         soup = BeautifulSoup(html, "html.parser")
-        items = []
+        items: list[tuple[str, str, str]] = []
         
         for li in soup.select("li"):
             a = li.find("a")
             if not a:
                 continue
             
-            href = a.get("href", "")
+            href = str(a.get("href", ""))
             text = a.get_text(strip=True)
             
             if not href or href == "#":
@@ -133,7 +139,7 @@ class ScanService:
         # 1. 从分页链接提取最大页码
         max_page = 1
         for a in soup.find_all("a", href=True):
-            href = a["href"]
+            href = str(a["href"])
             if "page=" in href:
                 m = re.search(r'[?&]page=(\d+)', href)
                 if m:
@@ -145,7 +151,8 @@ class ScanService:
 
         # 2. 从分页容器（class 含 pag/page）内的 N/M 提取
         for el in soup.find_all(True):
-            cls = el.get("class") or []
+            raw_cls = cast("str | list[str]", el.get("class") or [])
+            cls: list[str] = [raw_cls] if isinstance(raw_cls, str) else raw_cls
             cls_str = " ".join(cls).lower() if cls else ""
             if "pag" in cls_str or "page" in cls_str:
                 m = re.search(r'(\d+)\s*/\s*(\d+)', el.get_text(" "))
@@ -170,8 +177,8 @@ class ScanService:
         Returns:
             (dirs, files) - dirs: [(full_path, name)], files: [(name, url)]
         """
-        all_dirs = []
-        all_files = []
+        all_dirs: list[tuple[str, str]] = []
+        all_files: list[tuple[str, str]] = []
         page = 1
         
         while True:
@@ -219,9 +226,13 @@ class ScanService:
         max_depth: int = 10
     ) -> List[DownloadItem]:
         """扫描目录"""
-        items = []
+        items: list[DownloadItem] = []
         
         if depth > max_depth or self.is_cancelled():
+            return items
+        
+        # 续扫：跳过已完全扫描的目录
+        if dir_path in self._scanned_dirs:
             return items
         
         dirs, files = self.get_all_pages(base_url, dir_path)
@@ -282,6 +293,12 @@ class ScanService:
                 self.on_item_found(item)
             
             time.sleep(0.02)
+        
+        # 标记当前目录为已完全扫描（仅在未取消时）
+        if not self.is_cancelled():
+            self._scanned_dirs.add(dir_path)
+            if self.on_dir_scanned:
+                self.on_dir_scanned(dir_path)
         
         return items
     

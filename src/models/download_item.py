@@ -1,7 +1,7 @@
 """下载项数据模型"""
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from typing import Optional
+from typing import Any
 import time
 
 
@@ -64,7 +64,7 @@ class DownloadItem:
         }
         return status_map.get(self.status, "未知")
     
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典"""
         data = asdict(self)
         data['status'] = self.status.value
@@ -72,7 +72,7 @@ class DownloadItem:
         return data
     
     @classmethod
-    def from_dict(cls, data: dict) -> 'DownloadItem':
+    def from_dict(cls, data: dict[str, Any]) -> 'DownloadItem':
         """从字典创建（不修改传入字典）"""
         data = dict(data)
         data['status'] = DownloadStatus(data['status'])
@@ -101,5 +101,5 @@ class DownloadStats:
             return 0.0
         return (self.completed / self.total_files) * 100
     
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -1,21 +1,20 @@
 """下载面板"""
+from typing import List
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-    QSplitter, QFrame
+    QWidget, QVBoxLayout, QHBoxLayout, QSplitter
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 
 from qfluentwidgets import (
     PrimaryPushButton, PushButton, LineEdit, 
-    ProgressBar, ScrollArea,
-    CardWidget, IconWidget, BodyLabel,
+    ProgressBar,
+    CardWidget, BodyLabel,
     CaptionLabel, StrongBodyLabel,
-    FluentIcon as FIF,
     InfoBar, InfoBarPosition
 )
 
-from ..models import AppConfig, DownloadItem, ItemType
+from ..models import AppConfig, DownloadItem
 from .widgets.log_widget import LogWidget
 from .widgets.tree_widget import DownloadTreeWidget
 
@@ -29,7 +28,7 @@ class DownloadPanel(QWidget):
     download_requested = Signal()          # 开始下载
     stop_requested = Signal()              # 停止
     
-    def __init__(self, config: AppConfig, parent=None):
+    def __init__(self, config: AppConfig, parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("downloadPanel")
         self.config = config
@@ -223,7 +222,7 @@ class DownloadPanel(QWidget):
         """添加目录树项目"""
         self.tree_widget.add_item(item)
 
-    def add_items_batch(self, items):
+    def add_items_batch(self, items: List[DownloadItem]) -> None:
         """批量添加目录树项目"""
         self.tree_widget.add_items_batch(items)
     

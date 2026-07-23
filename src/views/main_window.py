@@ -41,7 +41,7 @@ class MainWindow(FluentWindow):
         self._init_navigation()
         
         # 应用主题
-        self._apply_theme(config.theme)
+        self.apply_theme(config.theme)
     
     def _init_navigation(self):
         """初始化导航栏"""
@@ -67,7 +67,7 @@ class MainWindow(FluentWindow):
             position=NavigationItemPosition.BOTTOM
         )
     
-    def _apply_theme(self, theme: str):
+    def apply_theme(self, theme: str):
         """应用主题"""
         if theme == "dark":
             setTheme(Theme.DARK)
@@ -76,10 +76,10 @@ class MainWindow(FluentWindow):
         else:
             setTheme(Theme.AUTO)
     
-    def closeEvent(self, event):
+    def closeEvent(self, e):
         """关闭事件"""
         self.closing.emit()
         self.config.window_width = self.width()
         self.config.window_height = self.height()
         self.config.save()
-        event.accept()
+        e.accept()

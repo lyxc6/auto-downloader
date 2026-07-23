@@ -4,9 +4,9 @@ import os
 import sys
 import threading
 from typing import List, Optional
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QObject, Signal
 
-from ..models import DownloadItem, DownloadStatus, DownloadStats, AppConfig
+from ..models import DownloadItem, AppConfig
 from ..services import DownloadService
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ class DownloadController(QObject):
     batch_completed = Signal(dict)             # stats_dict
     log_message = Signal(str, str)             # message, level
     
-    def __init__(self, config: AppConfig, parent=None):
+    def __init__(self, config: AppConfig, parent: QObject | None = None):
         super().__init__(parent)
         self.config = config
         self._service: Optional[DownloadService] = None

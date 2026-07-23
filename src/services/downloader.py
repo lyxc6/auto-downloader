@@ -154,7 +154,7 @@ class DownloadService:
                 resume_from = os.path.getsize(local_path)
 
             try:
-                headers = {}
+                headers: dict[str, str] = {}
                 mode = "wb"
                 start_downloaded = 0
                 if resume_from > 0:
@@ -231,9 +231,9 @@ class DownloadService:
     
     def download_batch(
         self,
-        items: list,
+        items: list[DownloadItem],
         download_dir: str,
-        on_all_complete: Optional[Callable] = None
+        on_all_complete: Optional[Callable[[DownloadStats], None]] = None
     ) -> DownloadStats:
         """批量下载（并发，并发度由 max_workers 控制）"""
         stats = DownloadStats()
@@ -255,7 +255,7 @@ class DownloadService:
             futures = [pool.submit(worker, it) for it in items]
             for fut in as_completed(futures):
                 try:
-                    _item_id, success, status = fut.result()
+                    _item_id, _success, status = fut.result()
                 except Exception as e:
                     logger.error("下载任务异常: %s", e)
                     failed += 1

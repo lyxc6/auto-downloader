@@ -3,11 +3,12 @@ import logging
 import sys
 import signal
 import threading
+from typing import Any, Optional
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt, QTimer
 
 from .utils.logger import setup_logging
-from .models import AppConfig, CacheManager
+from .models import AppConfig, CacheManager, DownloadItem
 from .controllers import DownloadController, ScanController
 from .views import MainWindow
 
@@ -52,15 +53,15 @@ class Application:
         # SIGINT 安全化：信号处理器只置位事件，由主线程定时器轮询处理
         self._shutdown_event = threading.Event()
         self._shutdown_done = False
-        self._shutdown_timer: QTimer = None
+        self._shutdown_timer: Optional[QTimer] = None
         signal.signal(signal.SIGINT, self._signal_handler)
         self._start_shutdown_poller()
         
         self._auto_save_timer = QTimer(self.window)
         self._auto_save_timer.setInterval(30000)
-        self._auto_save_timer.timeout.connect(lambda: self.cache_manager.save())
+        self._auto_save_timer.timeout.connect(self.cache_manager.save)
         self._refreshing = False
-        self._refresh_old_ids: set = set()
+        self._refresh_old_ids: set[str] = set()
     
     def _connect_signals(self):
         """连接信号"""
@@ -77,26 +78,31 @@ class Application:
         download_panel.stop_download_btn.clicked.connect(self.download_controller.cancel_download)
         
         # 控制器信号
-        self.scan_controller.items_found.connect(
-            lambda items: self.window.downloadPanel.add_items_batch(items)
-        )
+        def _on_items_found(items: list[DownloadItem]) -> None:
+            self.window.downloadPanel.add_items_batch(items)
+
+        def _on_scan_progress(files: int, dirs: int) -> None:
+            download_panel.update_stats(files, dirs, len(self.cache_manager.checked_items))
+
+        self.scan_controller.items_found.connect(_on_items_found)
         self.scan_controller.log_message.connect(download_panel.add_log)
-        self.scan_controller.scan_progress.connect(
-            lambda f, d: download_panel.update_stats(f, d, len(self.cache_manager.checked_items))
-        )
+        self.scan_controller.scan_progress.connect(_on_scan_progress)
         self.scan_controller.scan_completed.connect(self._on_scan_completed)
         
         self.download_controller.log_message.connect(download_panel.add_log)
-        self.download_controller.progress_updated.connect(
-            lambda id, dl, total: self.window.queuePanel.update_progress(id, dl, total)
-        )
-        self.download_controller.status_changed.connect(
-            lambda id, status: self.window.queuePanel.update_status(id, status)
-        )
+
+        def _on_progress(item_id: str, downloaded: int, total_size: int) -> None:
+            self.window.queuePanel.update_progress(item_id, downloaded, total_size)
+
+        def _on_status(item_id: str, status: str) -> None:
+            self.window.queuePanel.update_status(item_id, status)
+
+        self.download_controller.progress_updated.connect(_on_progress)
+        self.download_controller.status_changed.connect(_on_status)
         self.download_controller.batch_completed.connect(self._on_download_completed)
         
         # 设置面板信号
-        self.window.settingsPanel.theme_changed.connect(self.window._apply_theme)
+        self.window.settingsPanel.theme_changed.connect(self.window.apply_theme)
         self.window.settingsPanel.config_changed.connect(self._on_config_changed)
         self.window.closing.connect(self._on_app_closing)
         
@@ -109,7 +115,7 @@ class Application:
         if not self.scan_controller.is_scanning and not self.download_controller.is_downloading:
             self._auto_save_timer.stop()
 
-    def _on_checked_changed(self, checked_ids):
+    def _on_checked_changed(self, checked_ids: set[str]) -> None:
         """勾选状态变化：同步到缓存并实时更新已选统计"""
         self.cache_manager.set_checked_items(checked_ids)
         stats = self.cache_manager.get_stats()
@@ -124,7 +130,7 @@ class Application:
         
         self.window.downloadPanel.log_widget.clear()
         
-        # 相同URL且有缓存数据，直接从缓存恢复
+        # 相同URL且有缓存数据
         if self.cache_manager.has_data_for(url):
             logger.info("使用缓存数据恢复目录树: %s", url)
             self.window.downloadPanel.clear_tree()
@@ -139,10 +145,29 @@ class Application:
                 stats['total_files'], stats['total_dirs'], stats['checked_count']
             )
             self.window.downloadPanel.download_btn.setEnabled(stats['total_files'] > 0)
+            
+            # 扫描完整 → 直接返回
+            if self.cache_manager.is_scan_complete():
+                self.window.downloadPanel.add_log("=" * 50, "header")
+                self.window.downloadPanel.add_log("从缓存加载目录结构", "info")
+                self.window.downloadPanel.add_log(f"文件: {stats['total_files']}, 目录: {stats['total_dirs']}", "info")
+                self.window.downloadPanel.add_log("=" * 50, "header")
+                return
+            
+            # 扫描未完成 → 断点续扫
+            logger.info("检测到未完成扫描，继续从断点扫描: %s", url)
             self.window.downloadPanel.add_log("=" * 50, "header")
-            self.window.downloadPanel.add_log("从缓存加载目录结构", "info")
-            self.window.downloadPanel.add_log(f"文件: {stats['total_files']}, 目录: {stats['total_dirs']}", "info")
+            self.window.downloadPanel.add_log("检测到未完成扫描，继续从断点扫描...", "warning")
+            self.window.downloadPanel.add_log(f"已缓存: 文件 {stats['total_files']}, 目录 {stats['total_dirs']}", "info")
             self.window.downloadPanel.add_log("=" * 50, "header")
+            self.window.downloadPanel.set_scanning(True)
+            self.window.downloadPanel.download_btn.setEnabled(False)
+            self.cache_manager.set_scan_complete(False)
+            self.cache_manager.save()
+            self._start_auto_save()
+            self.scan_controller.start_scan(
+                url, scanned_dirs=self.cache_manager.get_scanned_dirs()
+            )
             return
         
         self.window.downloadPanel.set_scanning(True)
@@ -150,6 +175,7 @@ class Application:
         self.window.downloadPanel.clear_tree()
         self.cache_manager.clear()
         self.cache_manager.set_url(url)
+        self.cache_manager.save()
         self._start_auto_save()
         
         self.scan_controller.start_scan(url)
@@ -224,14 +250,14 @@ class Application:
         self.download_controller.start_download(checked_files)
         self._start_auto_save()
     
-    def _on_download_completed(self, stats_dict: dict):
+    def _on_download_completed(self, stats_dict: dict[str, Any]) -> None:
         """下载完成"""
         self.window.downloadPanel.set_downloading(False)
         self.cache_manager.save()
         logger.info("下载完成，缓存已保存")
         self._stop_auto_save_if_idle()
     
-    def _signal_handler(self, sig, frame):
+    def _signal_handler(self, sig: int, frame: object) -> None:
         """信号处理器：只置位事件，不在信号上下文做 I/O 或退出"""
         self._shutdown_event.set()
 
@@ -267,7 +293,7 @@ class Application:
         self.scan_controller.close_service()
         self.download_controller.close_service()
 
-    def _on_config_changed(self, changes: dict):
+    def _on_config_changed(self, changes: dict[str, Any]) -> None:
         """配置变更通知：设置已保存，下一批次下载/扫描生效"""
         logger.info("配置已更改，下次操作生效: %s", changes)
         try:

@@ -1,12 +1,13 @@
 """工具函数"""
 import os
 import sys
+from typing import cast
 
 
 def get_resource_path(relative_path: str) -> str:
     """获取资源文件路径"""
     if getattr(sys, 'frozen', False):
-        base_path = sys._MEIPASS
+        base_path: str = cast(str, sys._MEIPASS)  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType]
     else:
         base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base_path, relative_path)
@@ -19,7 +20,7 @@ def get_app_dir() -> str:
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def format_size(size: int) -> str:
+def format_size(size: float) -> str:
     """格式化文件大小"""
     for unit in ['B', 'KB', 'MB', 'GB']:
         if size < 1024.0:

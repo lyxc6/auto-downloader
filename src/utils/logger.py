@@ -2,7 +2,6 @@
 import logging
 import sys
 import os
-from typing import Optional
 
 
 _log_setup_done = False

@@ -2,8 +2,8 @@
 import logging
 import threading
 from time import monotonic
-from typing import Optional
-from PySide6.QtCore import QObject, Signal, Slot
+from typing import Optional, Set
+from PySide6.QtCore import QObject, Signal
 
 from ..models import DownloadItem, AppConfig, CacheManager
 from ..services import ScanService
@@ -21,7 +21,7 @@ class ScanController(QObject):
     scan_error = Signal(str)                 # error_message
     log_message = Signal(str, str)           # message, level
     
-    def __init__(self, config: AppConfig, cache_manager: CacheManager, parent=None):
+    def __init__(self, config: AppConfig, cache_manager: CacheManager, parent: QObject | None = None):
         super().__init__(parent)
         self.config = config
         self.cache_manager = cache_manager
@@ -46,8 +46,14 @@ class ScanController(QObject):
         
         return service
     
-    def start_scan(self, url: str, max_depth: Optional[int] = None):
-        """开始扫描"""
+    def start_scan(self, url: str, max_depth: Optional[int] = None, scanned_dirs: Optional[Set[str]] = None):
+        """开始扫描
+        
+        Args:
+            url: 扫描目标 URL
+            max_depth: 最大递归深度
+            scanned_dirs: 已扫描目录集合（续扫时跳过这些目录）
+        """
         with self._lock:
             if self._is_scanning:
                 self.log_message.emit("扫描已在进行中", "warning")
@@ -67,15 +73,24 @@ class ScanController(QObject):
             try:
                 self._service = self._create_service()
                 
+                # 续扫：传入已扫描目录集合
+                if scanned_dirs:
+                    self._service.set_scanned_dirs(scanned_dirs)
+                
                 file_count = 0
                 dir_count = 0
-                buffer = []
+                buffer: list[DownloadItem] = []
                 last_flush = monotonic()
                 BATCH_SIZE = 50
                 FLUSH_INTERVAL = 0.1
                 
                 def on_item_found(item: DownloadItem):
                     nonlocal file_count, dir_count, last_flush, buffer
+                    
+                    # 续扫去重：已存在的 item 不重复计数/不重复入 buffer
+                    if self.cache_manager.has_item(item.item_id):
+                        self.cache_manager.add_item(item)
+                        return
                     
                     # 添加到缓存
                     self.cache_manager.add_item(item)
@@ -95,9 +110,10 @@ class ScanController(QObject):
                 
                 # 设置回调
                 self._service.on_item_found = on_item_found
+                self._service.on_dir_scanned = lambda dp: self.cache_manager.mark_dir_scanned(dp)
                 
                 # 执行扫描
-                items = self._service.scan_directory(
+                _ = self._service.scan_directory(
                     url, max_depth=max_depth
                 )
                 
@@ -106,6 +122,10 @@ class ScanController(QObject):
                     self.items_found.emit(buffer)
                     self.scan_progress.emit(file_count, dir_count)
                     buffer = []
+                
+                # 标记扫描完成状态（仅在未取消时）
+                if not self._service.is_cancelled():
+                    self.cache_manager.set_scan_complete(True)
                 
                 # 扫描完成
                 self.scan_completed.emit(file_count, dir_count)

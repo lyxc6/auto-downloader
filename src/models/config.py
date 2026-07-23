@@ -3,8 +3,8 @@ import json
 import logging
 import os
 import sys
-from dataclasses import dataclass, field, asdict
-from typing import Optional
+from dataclasses import dataclass, asdict
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ class AppConfig:
             logger.error("加载配置失败", exc_info=True)
         return config
     
-    def update(self, **kwargs):
+    def update(self, **kwargs: Any):
         """更新配置"""
         for key, value in kwargs.items():
             if hasattr(self, key):
