@@ -2,6 +2,7 @@ name: Build and Release
 
 on:
   push:
+    branches: [main]
     tags:
       - 'v*'
 
@@ -28,10 +29,26 @@ jobs:
       - name: Build with PyInstaller
         run: pyinstaller 自动下载器.spec
 
-      - name: Create Release
+      - name: Get short SHA
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        id: slug
+        run: echo "sha=$(git rev-parse --short HEAD)" >> $env:GITHUB_OUTPUT
+
+      - name: Create Pre-release (push to main)
+        if: "!startsWith(github.ref, 'refs/tags/')"
         uses: softprops/action-gh-release@v2
         with:
-          name: 自动下载器 ${{ github.ref_name }}
+          name: "自动下载器 build-${{ steps.slug.outputs.sha }}"
+          tag_name: "build-${{ steps.slug.outputs.sha }}"
+          draft: false
+          prerelease: true
+          files: dist/自动下载器.exe
+
+      - name: Create Release (tag push)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "自动下载器 ${{ github.ref_name }}"
           draft: false
           prerelease: false
           files: dist/自动下载器.exe
