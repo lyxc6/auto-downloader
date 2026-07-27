@@ -358,7 +358,7 @@ class ScanService:
                         name=name,
                         url="",
                         item_type=ItemType.DIR,
-                        parent_id=parent_id,
+                        parent_id=dir_path,
                         full_path=full_path
                     )
                     all_items.append(item)
@@ -379,7 +379,7 @@ class ScanService:
                         name=name,
                         url=file_url,
                         item_type=ItemType.FILE,
-                        parent_id=parent_id,
+                        parent_id=dir_path,
                         full_path=item_id
                     )
                     all_items.append(item)
@@ -441,7 +441,7 @@ class ScanService:
                 name=name,
                 url=file_url,
                 item_type=ItemType.FILE,
-                parent_id=parent_id,
+                parent_id=dir_path,
                 full_path=item_id
             )
             with items_lock:
@@ -461,7 +461,7 @@ class ScanService:
                 name=name,
                 url="",
                 item_type=ItemType.DIR,
-                parent_id=parent_id,
+                parent_id=dir_path,
                 full_path=full_path
             )
             with items_lock:
@@ -561,7 +561,7 @@ class ScanService:
                                 name=name,
                                 url=file_url,
                                 item_type=ItemType.FILE,
-                                parent_id=pid,
+                                parent_id=path,
                                 full_path=item_id
                             )
                             with items_lock:
@@ -579,7 +579,7 @@ class ScanService:
                                 name=name,
                                 url="",
                                 item_type=ItemType.DIR,
-                                parent_id=pid,
+                                parent_id=path,
                                 full_path=full_path
                             )
                             with items_lock:

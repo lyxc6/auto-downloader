@@ -99,9 +99,8 @@ class ScanController(QObject):
                 def on_item_found(item: DownloadItem):
                     nonlocal file_count, dir_count, last_flush, buffer
                     
-                    # 续扫去重：已存在的 item 不重复计数/不重复入 buffer
+                    # 续扫去重：已存在的 item 不覆盖（避免并行竞态损坏 parent_id）
                     if self.cache_manager.has_item(item.item_id):
-                        self.cache_manager.add_item(item)
                         return
                     
                     # 添加到缓存
@@ -219,7 +218,6 @@ class ScanController(QObject):
                 def on_item_found(item: DownloadItem):
                     nonlocal file_count, dir_count, last_flush, buffer
                     if self.cache_manager.has_item(item.item_id):
-                        self.cache_manager.add_item(item)
                         return
                     self.cache_manager.add_item(item)
                     if item.is_file:
