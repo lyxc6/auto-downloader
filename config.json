@@ -5,9 +5,10 @@
   "timeout": 120,
   "max_depth": 10,
   "scan_delay": 0.15,
-  "theme": "auto",
+  "scan_mode": "bfs",
+  "theme": "dark",
   "language": "zh_CN",
-  "window_width": 1131,
-  "window_height": 746,
+  "window_width": 900,
+  "window_height": 619,
   "last_url": "https://www.flyingfry.cc/index.php/224.html"
 }

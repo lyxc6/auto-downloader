@@ -1,72 +1,57 @@
 """日志组件"""
-from PySide6.QtWidgets import QTextEdit, QVBoxLayout, QWidget
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QColor, QTextCursor
+from PySide6.QtGui import QFont, QColor, QTextCursor, QTextCharFormat
 
-from qfluentwidgets import ScrollArea
+from qfluentwidgets import PlainTextEdit, isDarkTheme, qconfig, Theme
 
 
-class LogWidget(ScrollArea):
-    """日志组件"""
-    
+# 浅色 / 深色文字配色
+_LIGHT = {
+    "info": "#1e1e1e", "success": "#0f7b0f", "error": "#c42b1c",
+    "warning": "#9d5d00", "header": "#0000ff", "dim": "#808080",
+}
+_DARK = {
+    "info": "#d4d4d4", "success": "#6a9955", "error": "#f44747",
+    "warning": "#cca700", "header": "#569cd6", "dim": "#808080",
+}
+
+
+class LogWidget(PlainTextEdit):
+    """日志组件（基于 PlainTextEdit，自动适配主题）"""
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._setup_ui()
-    
-    def _setup_ui(self):
-        """设置UI"""
-        self.setWidgetResizable(True)
-        
-        content = QWidget()
-        self.setWidget(content)
-        
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(5, 5, 5, 5)
-        
-        self.text_edit = QTextEdit()
-        self.text_edit.setReadOnly(True)
-        self.text_edit.setFont(QFont("Consolas", 9))
-        self.text_edit.setStyleSheet("""
-            QTextEdit {
-                background-color: #1e1e1e;
-                color: #d4d4d4;
-                border: none;
-                padding: 5px;
-            }
-        """)
-        
-        layout.addWidget(self.text_edit)
-        
-        # 颜色配置
-        self._colors = {
-            "info": "#d4d4d4",
-            "success": "#6a9955",
-            "error": "#f44747",
-            "warning": "#cca700",
-            "header": "#569cd6",
-            "dim": "#808080"
-        }
-    
-    def add_message(self, message: str, level: str = "info"):
-        """添加消息"""
-        color = self._colors.get(level, "#d4d4d4")
-        
-        # 设置颜色
-        self.text_edit.setTextColor(QColor(color))
-        
-        # 添加消息
+        self.setReadOnly(True)
+        self.setFont(QFont("Consolas", 9))
+        self._messages: list[tuple[str, str]] = []
+        qconfig.themeChanged.connect(self._on_theme_changed)
+
+    def _get_colors(self) -> dict:
+        return dict(_DARK if isDarkTheme() else _LIGHT)
+
+    def _render_message(self, message: str, level: str):
+        colors = self._get_colors()
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(colors.get(level, colors["info"])))
         if level == "header":
-            self.text_edit.setFontWeight(QFont.Weight.Bold)
+            fmt.setFontWeight(QFont.Weight.Bold)
         else:
-            self.text_edit.setFontWeight(QFont.Weight.Normal)
-        
-        self.text_edit.append(message)
-        
-        # 滚动到底部
-        cursor = self.text_edit.textCursor()
+            fmt.setFontWeight(QFont.Weight.Normal)
+        cursor = self.textCursor()
+        cursor.mergeCharFormat(fmt)
+        self.appendPlainText(message)
         cursor.movePosition(QTextCursor.MoveOperation.End)
-        self.text_edit.setTextCursor(cursor)
-    
+        self.setTextCursor(cursor)
+        self.ensureCursorVisible()
+
+    def add_message(self, message: str, level: str = "info"):
+        self._messages.append((message, level))
+        self._render_message(message, level)
+
+    def _on_theme_changed(self, _theme: Theme):
+        self.clear()
+        for msg, lvl in self._messages:
+            self._render_message(msg, lvl)
+
     def clear(self):
-        """清空日志"""
-        self.text_edit.clear()
+        self._messages.clear()
+        super().clear()

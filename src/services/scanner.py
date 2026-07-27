@@ -185,9 +185,13 @@ class ScanService:
             if self.is_cancelled():
                 break
             
-            params = f"?dir={quote(dir_path)}" if dir_path else ""
-            page_param = f"&page={page}" if page > 1 else ""
-            url = base_url + params + page_param
+            if dir_path:
+                query = f"?dir={quote(dir_path)}"
+                if page > 1:
+                    query += f"&page={page}"
+            else:
+                query = f"?page={page}" if page > 1 else ""
+            url = base_url + query
             
             html = self.get_page(url)
             if not html:
@@ -301,6 +305,94 @@ class ScanService:
                 self.on_dir_scanned(dir_path)
         
         return items
+    
+    def scan_directory_bfs(
+        self,
+        base_url: str,
+        dir_path: str = "",
+        parent_id: str = "",
+        depth: int = 0,
+        max_depth: int = 10
+    ) -> List[DownloadItem]:
+        """广度优先扫描目录（逐层扫描，先显示一级目录再逐层深入）"""
+        from collections import deque
+        
+        all_items: list[DownloadItem] = []
+        queue: deque[tuple[str, str, int]] = deque()
+        queue.append((dir_path, parent_id, depth))
+        
+        while queue and not self.is_cancelled():
+            current_level: list[tuple[str, str, int]] = []
+            while queue:
+                current_level.append(queue.popleft())
+            
+            for dir_path, parent_id, depth in current_level:
+                if self.is_cancelled():
+                    break
+                if depth > max_depth:
+                    continue
+                if dir_path in self._scanned_dirs:
+                    continue
+                
+                dirs, files = self.get_all_pages(base_url, dir_path)
+                
+                display_path = dir_path or "/"
+                if self.on_log:
+                    if len(dirs) > 0 or len(files) > 0:
+                        self.on_log(f"正在扫描: {display_path}", "info")
+                    else:
+                        self.on_log(f"正在扫描: {display_path}  (空目录)", "dim")
+                
+                if self.on_log and (dirs or files):
+                    self.on_log(f"  ├─ 子目录: {len(dirs)} 个, 文件: {len(files)} 个", "info")
+                
+                for full_path, name in dirs:
+                    if self.is_cancelled():
+                        break
+                    
+                    item_id = full_path
+                    item = DownloadItem(
+                        item_id=item_id,
+                        name=name,
+                        url="",
+                        item_type=ItemType.DIR,
+                        parent_id=parent_id,
+                        full_path=full_path
+                    )
+                    all_items.append(item)
+                    
+                    if self.on_item_found:
+                        self.on_item_found(item)
+                    
+                    queue.append((full_path, full_path, depth + 1))
+                    time.sleep(0.02)
+                
+                for name, file_url in files:
+                    if self.is_cancelled():
+                        break
+                    
+                    item_id = f"{dir_path}/{name}" if dir_path else name
+                    item = DownloadItem(
+                        item_id=item_id,
+                        name=name,
+                        url=file_url,
+                        item_type=ItemType.FILE,
+                        parent_id=parent_id,
+                        full_path=item_id
+                    )
+                    all_items.append(item)
+                    
+                    if self.on_item_found:
+                        self.on_item_found(item)
+                    
+                    time.sleep(0.02)
+                
+                if not self.is_cancelled():
+                    self._scanned_dirs.add(dir_path)
+                    if self.on_dir_scanned:
+                        self.on_dir_scanned(dir_path)
+        
+        return all_items
     
     def close(self):
         """关闭session（原子，可重复调用）"""

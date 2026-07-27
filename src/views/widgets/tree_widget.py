@@ -1,8 +1,8 @@
 """树形组件扩展"""
 from collections import deque
 from typing import Callable, Dict, List, Optional, Set
-from PySide6.QtWidgets import QTreeWidgetItem
-from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QTreeWidgetItem, QMenu, QHeaderView
+from PySide6.QtCore import Qt, Signal
 
 from qfluentwidgets import TreeWidget
 
@@ -12,6 +12,8 @@ from ...utils.helpers import format_size
 
 class DownloadTreeWidget(TreeWidget):
     """下载树形组件（虚拟加载）"""
+
+    refresh_dir_requested = Signal(str)  # item_id：右键刷新目录
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -28,6 +30,8 @@ class DownloadTreeWidget(TreeWidget):
         self.setColumnWidth(2, 100)
         self.itemChanged.connect(self._on_item_changed)
         self.itemExpanded.connect(self._on_item_expanded)
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
 
     def set_check_sync_callback(self, cb: Optional[Callable[[Set[str]], None]]) -> None:
         """注册勾选状态实时同步回调（cb 接收 checked_ids 集合）"""
@@ -339,3 +343,69 @@ class DownloadTreeWidget(TreeWidget):
         self._children_index.clear()
         self._loaded.clear()
         self._checked_set.clear()
+
+    def _show_context_menu(self, pos):
+        """显示右键菜单"""
+        item = self.itemAt(pos)
+        if item is None:
+            return
+        item_id = item.data(0, Qt.ItemDataRole.UserRole)
+        if item_id is None or item_id not in self._all_items:
+            return
+        dl_item = self._all_items[item_id]
+        if not dl_item.is_dir:
+            return
+        menu = QMenu(self)
+        refresh_action = menu.addAction("🔄 刷新此目录")
+        refresh_action.triggered.connect(lambda checked=False, iid=item_id: self.refresh_dir_requested.emit(iid))
+        menu.exec_(self.viewport().mapToGlobal(pos))
+
+    def remove_children_of(self, dir_item_id: str) -> Set[str]:
+        """移除指定目录的所有子节点（含后代），保留目录自身。返回被移除的 item_id 集合"""
+        descendant_ids: Set[str] = set()
+        queue = deque(self._children_index.get(dir_item_id, []))
+        while queue:
+            cid = queue.popleft()
+            descendant_ids.add(cid)
+            queue.extend(self._children_index.get(cid, []))
+
+        tree_item = self._items.get(dir_item_id)
+        if tree_item is not None:
+            realized_desc: Set[str] = set()
+
+            def _collect_realized(tw_item, acc: set):
+                for i in range(tw_item.childCount()):
+                    child = tw_item.child(i)
+                    cid = child.data(0, Qt.ItemDataRole.UserRole)
+                    if cid is not None:
+                        acc.add(cid)
+                    _collect_realized(child, acc)
+
+            _collect_realized(tree_item, realized_desc)
+            for did in realized_desc:
+                tw = self._items.pop(did, None)
+                if tw is not None:
+                    parent = tw.parent()
+                    if parent is not None:
+                        parent.removeChild(tw)
+                    else:
+                        idx = self.indexOfTopLevelItem(tw)
+                        if idx >= 0:
+                            self.takeTopLevelItem(idx)
+
+        for did in descendant_ids:
+            self._all_items.pop(did, None)
+            self._children_index.pop(did, None)
+            self._loaded.discard(did)
+            self._checked_set.discard(did)
+
+        self._children_index.pop(dir_item_id, None)
+        self._loaded.discard(dir_item_id)
+
+        tree_item = self._items.get(dir_item_id)
+        if tree_item is not None and dir_item_id in self._all_items:
+            tree_item.setChildIndicatorPolicy(
+                QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator
+            )
+
+        return descendant_ids

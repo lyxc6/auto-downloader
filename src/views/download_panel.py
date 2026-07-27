@@ -25,6 +25,7 @@ class DownloadPanel(QWidget):
     # 信号定义
     scan_requested = Signal(str)           # url
     refresh_requested = Signal(str)        # 强制刷新url
+    refresh_directory_requested = Signal(str)  # item_id：刷新单个目录
     download_requested = Signal()          # 开始下载
     stop_requested = Signal()              # 停止
     
@@ -163,6 +164,7 @@ class DownloadPanel(QWidget):
         self.deselect_all_btn.clicked.connect(self.tree_widget.deselect_all)
         self.expand_btn.clicked.connect(self.tree_widget.expand_all_items)
         self.collapse_btn.clicked.connect(self.tree_widget.collapse_all_items)
+        self.tree_widget.refresh_dir_requested.connect(self.refresh_directory_requested)
     
     def _on_scan_clicked(self):
         """扫描按钮点击"""

@@ -24,18 +24,52 @@ pip install -r requirements.txt
 # Run GUI
 python main.py
 
+# Run tests
+python -m pytest
+
+# Run single test
+python -m pytest tests/test_<name>.py
+
+# Type checking
+python -m pyright src
+
 # Build executable (PyInstaller)
 pyinstaller 自动下载器.spec
 # Output: dist/自动下载器.exe
 ```
 
+## FluentUI Constraint
+
+**ALL UI components MUST use `qfluentwidgets` (PySide6-Fluent-Widgets).**
+
+```python
+# Correct - use qfluentwidgets components
+from qfluentwidgets import (
+    FluentWindow, CardWidget, TreeWidget,
+    PrimaryPushButton, PushButton, LineEdit,
+    ProgressBar, InfoBar, InfoBarPosition,
+    SettingCardGroup, SwitchSettingCard,
+    FluentIcon as FIF, Theme, setTheme
+)
+
+# Wrong - avoid raw PySide6 widgets for UI
+from PySide6.QtWidgets import QPushButton, QLineEdit
+```
+
+- Use `FluentWindow` as main window base class
+- Use `CardWidget` for grouped content
+- Use `PrimaryPushButton` for main actions, `PushButton` for secondary
+- Use `InfoBar` for notifications (not QMessageBox)
+- Use `SettingCardGroup` for settings panels
+- Use `FluentIcon` for icons (not custom QIcon)
+
 ## Architecture Notes
 
 - MVC architecture pattern
-- Uses PySide6 + PySide6-Fluent-Widgets for Win11 Fluent Design
 - GUI runs downloads in daemon threads with signal-slot communication
-- Supports theme switching (light/dark/auto)
+- Supports theme switching (light/dark/auto) via `setTheme()`
 - Cache file location: same directory as exe (frozen) or script (dev)
+- Tree widget uses virtual loading for large datasets (lazy expansion)
 
 ## Conventions
 
@@ -43,6 +77,7 @@ pyinstaller 自动下载器.spec
 - File paths use `os.path` for cross-platform compatibility
 - HTTP requests use `requests.Session` with retry logic
 - PySide6 signal-slot pattern for UI updates
+- Use `qconfig` for theme persistence
 
 ## Gotchas
 
@@ -50,3 +85,4 @@ pyinstaller 自动下载器.spec
 - GUI preview requires Pillow; gracefully degrades if missing
 - Auto-save timer saves cache every 30s during active scan/download; stops when both are idle. Refresh keeps checked items and prunes entries no longer present on the server (incremental, preserves expand/scroll state).
 - Signal handler (SIGINT) registered for emergency cache save on Ctrl+C
+- PyInstaller build requires `collect_data_files('qfluentwidgets')` for FluentUI assets

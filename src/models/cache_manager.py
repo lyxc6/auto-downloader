@@ -101,11 +101,20 @@ class CacheManager:
             self.url = ""
     
     def clear_tree_data_only(self):
-        """仅清空 tree_data，保留 checked_items 和 url（用于刷新场景）"""
+        """仅清空 tree_data 和 scan_complete，保留 checked_items、scanned_dirs、url（用于刷新场景）"""
         with self._lock:
             self.tree_data.clear()
-            self.scanned_dirs.clear()
             self.scan_complete = False
+
+    def save_scanned_dirs_backup(self) -> Set[str]:
+        """返回 scanned_dirs 快照（刷新前备份用）"""
+        with self._lock:
+            return set(self.scanned_dirs)
+
+    def restore_scanned_dirs(self, backup: Set[str]) -> None:
+        """恢复 scanned_dirs（刷新失败时用）"""
+        with self._lock:
+            self.scanned_dirs = set(backup)
     
     def cleanup_checked(self):
         """剔除 checked_items 中已不在 tree_data 里的失效 id"""
@@ -131,6 +140,11 @@ class CacheManager:
         """标记目录为已完全扫描（线程安全）"""
         with self._lock:
             self.scanned_dirs.add(dir_path)
+
+    def mark_dir_unscanned(self, dir_path: str) -> None:
+        """移除目录的已扫描标记，允许重新扫描（线程安全）"""
+        with self._lock:
+            self.scanned_dirs.discard(dir_path)
 
     def is_dir_scanned(self, dir_path: str) -> bool:
         """目录是否已完全扫描"""
@@ -180,6 +194,27 @@ class CacheManager:
         with self._lock:
             self.tree_data.pop(item_id, None)
             self.checked_items.discard(item_id)
+
+    def remove_directory_descendants(self, dir_item_id: str) -> Set[str]:
+        """移除目录的所有后代（含子目录和文件），返回被移除的 item_id 集合。线程安全。"""
+        with self._lock:
+            from collections import deque as _dq
+            to_remove: Set[str] = set()
+            queue = _dq()
+            for cid, item in self.tree_data.items():
+                if item.parent_id == dir_item_id:
+                    queue.append(cid)
+            while queue:
+                cid = queue.popleft()
+                to_remove.add(cid)
+                for child_id, child_item in self.tree_data.items():
+                    if child_item.parent_id == cid:
+                        queue.append(child_id)
+            for rid in to_remove:
+                self.tree_data.pop(rid, None)
+                self.checked_items.discard(rid)
+            self.scanned_dirs.discard(dir_item_id)
+            return to_remove
     
     def get_item(self, item_id: str) -> Optional[DownloadItem]:
         """获取项目"""

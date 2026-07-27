@@ -10,7 +10,9 @@ from qfluentwidgets import (
     ProgressBar, PushButton,
     StrongBodyLabel, BodyLabel, CaptionLabel,
     FluentIcon as FIF,
-    TransparentPushButton
+    TransparentPushButton,
+    FluentSystemColor,
+    qconfig, Theme
 )
 
 
@@ -59,15 +61,15 @@ class QueueItemWidget(QWidget):
     def set_status(self, status: str):
         """设置状态"""
         status_map = {
-            "pending": ("等待中", "gray"),
-            "downloading": ("下载中", "#0078d4"),
-            "completed": ("已完成", "#107c10"),
-            "failed": ("失败", "#d13438"),
-            "skipped": ("已跳过", "#ff8c00"),
+            "pending":     ("等待中", FluentSystemColor.CRITICAL_BACKGROUND),
+            "downloading": ("下载中", FluentSystemColor.CRITICAL_FOREGROUND),
+            "completed":   ("已完成", FluentSystemColor.SUCCESS_FOREGROUND),
+            "failed":      ("失败",   FluentSystemColor.CRITICAL_FOREGROUND),
+            "skipped":     ("已跳过", FluentSystemColor.CAUTION_FOREGROUND),
         }
-        text, color = status_map.get(status, ("未知", "gray"))
+        text, color_enum = status_map.get(status, ("未知", FluentSystemColor.CRITICAL_BACKGROUND))
         self.status_label.setText(text)
-        self.status_label.setStyleSheet(f"color: {color};")
+        self.status_label.setStyleSheet(f"color: {color_enum.color().name()};")
 
 
 class QueuePanel(QWidget):
@@ -78,6 +80,7 @@ class QueuePanel(QWidget):
         self.setObjectName("queuePanel")
         self._items = {}  # item_id -> QueueItemWidget
         self._setup_ui()
+        qconfig.themeChanged.connect(self._on_theme_changed)
     
     def _setup_ui(self):
         """设置UI"""
@@ -169,3 +172,19 @@ class QueuePanel(QWidget):
         self.completed_label.setText(f"已完成: {completed}")
         self.failed_label.setText(f"失败: {failed}")
         self.pending_label.setText(f"等待中: {pending}")
+    
+    def _on_theme_changed(self, _theme: Theme):
+        """主题切换：刷新所有可见状态标签颜色"""
+        for widget in self._items.values():
+            current_text = widget.status_label.text()
+            # 反查当前状态以重新应用颜色
+            for status_key, (text, _) in {
+                "pending": ("等待中", None),
+                "downloading": ("下载中", None),
+                "completed": ("已完成", None),
+                "failed": ("失败", None),
+                "skipped": ("已跳过", None),
+            }.items():
+                if current_text == text:
+                    widget.set_status(status_key)
+                    break

@@ -21,6 +21,7 @@ class AppConfig:
     # 扫描设置
     max_depth: int = 10
     scan_delay: float = 0.15  # 扫描间隔（秒）
+    scan_mode: str = "dfs"    # "dfs" 深度优先, "bfs" 广度优先
     
     # 界面设置
     theme: str = "auto"  # "light", "dark", "auto"

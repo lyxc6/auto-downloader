@@ -6,6 +6,7 @@ import threading
 from typing import Any, Optional
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt, QTimer
+from qfluentwidgets import InfoBar, InfoBarPosition
 
 from .utils.logger import setup_logging
 from .models import AppConfig, CacheManager, DownloadItem
@@ -62,6 +63,7 @@ class Application:
         self._auto_save_timer.timeout.connect(self.cache_manager.save)
         self._refreshing = False
         self._refresh_old_ids: set[str] = set()
+        self._refresh_scanned_backup: Optional[set[str]] = None
     
     def _connect_signals(self):
         """连接信号"""
@@ -71,6 +73,7 @@ class Application:
         # 扫描信号
         download_panel.scan_requested.connect(self._start_scan)
         download_panel.refresh_requested.connect(self._start_refresh)
+        download_panel.refresh_directory_requested.connect(self._start_directory_refresh)
         download_panel.stop_scan_btn.clicked.connect(self.scan_controller.cancel_scan)
         
         # 下载信号
@@ -88,6 +91,7 @@ class Application:
         self.scan_controller.log_message.connect(download_panel.add_log)
         self.scan_controller.scan_progress.connect(_on_scan_progress)
         self.scan_controller.scan_completed.connect(self._on_scan_completed)
+        self.scan_controller.scan_error.connect(self._on_scan_error)
         
         self.download_controller.log_message.connect(download_panel.add_log)
 
@@ -166,7 +170,8 @@ class Application:
             self.cache_manager.save()
             self._start_auto_save()
             self.scan_controller.start_scan(
-                url, scanned_dirs=self.cache_manager.get_scanned_dirs()
+                url, scanned_dirs=self.cache_manager.get_scanned_dirs(),
+                scan_mode=self.config.scan_mode
             )
             return
         
@@ -190,12 +195,51 @@ class Application:
         self.window.downloadPanel.download_btn.setEnabled(False)
         # 不清空 UI 树，刷新期间旧树可见可操作
         self._refresh_old_ids = set(self.cache_manager.tree_data.keys())
+        # 备份 scanned_dirs，手动清空以强制重新扫描所有目录
+        self._refresh_scanned_backup = self.cache_manager.save_scanned_dirs_backup()
+        with self.cache_manager._lock:
+            self.cache_manager.scanned_dirs.clear()
         self.cache_manager.clear_tree_data_only()
         self.cache_manager.set_url(url)
         self._refreshing = True
         self._start_auto_save()
         logger.info("强制刷新扫描: %s", url)
-        self.scan_controller.start_scan(url)
+        self.scan_controller.start_scan(url, scan_mode=self.config.scan_mode)
+    
+    def _start_directory_refresh(self, item_id: str):
+        """刷新单个目录（清除其子项，重新扫描该目录）"""
+        item = self.cache_manager.get_item(item_id)
+        if item is None or not item.is_dir:
+            return
+
+        base_url = self.cache_manager.url
+        if not base_url:
+            InfoBar.error(
+                title="错误",
+                content="无有效URL，请先执行一次扫描",
+                parent=self.window,
+                position=InfoBarPosition.TOP
+            )
+            return
+
+        logger.info("刷新单个目录: %s (path=%s)", item_id, item.full_path)
+
+        tw = self.window.downloadPanel.tree_widget
+        removed_ids = tw.remove_children_of(item_id)
+        self.cache_manager.remove_directory_descendants(item_id)
+        self.cache_manager.mark_dir_unscanned(item.full_path)
+
+        stats = self.cache_manager.get_stats()
+        self.window.downloadPanel.update_stats(
+            stats['total_files'], stats['total_dirs'], stats['checked_count']
+        )
+
+        self.window.downloadPanel.set_scanning(True)
+        self.window.downloadPanel.download_btn.setEnabled(False)
+        self._start_auto_save()
+        self.scan_controller.start_directory_scan(
+            base_url, item.full_path, item.parent_id
+        )
     
     def _on_scan_completed(self, file_count: int, dir_count: int):
         """扫描完成"""
@@ -214,6 +258,7 @@ class Application:
             self.cache_manager.cleanup_checked()
             self._refreshing = False
             self._refresh_old_ids.clear()
+            self._refresh_scanned_backup = None
         
         # 更新统计
         stats = self.cache_manager.get_stats()
@@ -223,6 +268,16 @@ class Application:
             stats['checked_count']
         )
         
+        self._stop_auto_save_if_idle()
+    
+    def _on_scan_error(self, error_msg: str):
+        """扫描失败：恢复备份的 scanned_dirs"""
+        if self._refresh_scanned_backup is not None:
+            self.cache_manager.restore_scanned_dirs(self._refresh_scanned_backup)
+            self._refresh_scanned_backup = None
+            self._refreshing = False
+            self._refresh_old_ids.clear()
+            logger.info("刷新失败，已恢复 scanned_dirs 备份")
         self._stop_auto_save_if_idle()
     
     def _start_download(self):

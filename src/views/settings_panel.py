@@ -1,5 +1,5 @@
 """设置面板"""
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QSpinBox
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout
 from PySide6.QtCore import Qt, Signal
 
 from qfluentwidgets import (
@@ -9,6 +9,8 @@ from qfluentwidgets import (
     StrongBodyLabel, BodyLabel,
     FluentIcon as FIF,
     OptionsSettingCard,
+    SpinBox,
+    SmoothScrollArea,
     Theme
 )
 from qfluentwidgets.common.config import OptionsConfigItem, OptionsValidator
@@ -23,12 +25,12 @@ class SpinBoxSettingCard(SettingCard):
     
     def __init__(self, min_val, max_val, step, icon, title, content=None, parent=None):
         super().__init__(icon, title, content, parent)
-        self.spin_box = QSpinBox(self)
+        self.spin_box = SpinBox(self)
         self.spin_box.setRange(min_val, max_val)
         self.spin_box.setSingleStep(step)
         self.spin_box.setMinimumWidth(120)
         
-        self.hBoxLayout.addWidget(self.spin_box)
+        self.hBoxLayout.addWidget(self.spin_box, 0, Qt.AlignRight)
         self.hBoxLayout.addSpacing(16)
         
         self.spin_box.valueChanged.connect(self.valueChanged.emit)
@@ -90,12 +92,19 @@ class SettingsPanel(QWidget):
     def _setup_ui(self):
         """设置UI"""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(15)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        # 滚动区域
+        scroll_area = SmoothScrollArea(self)
+        scroll_area.setWidgetResizable(True)
+        scroll_widget = QWidget()
+        scroll_layout = QVBoxLayout(scroll_widget)
+        scroll_layout.setContentsMargins(20, 20, 20, 20)
+        scroll_layout.setSpacing(15)
         
         # 标题
         title = StrongBodyLabel("设置")
-        layout.addWidget(title)
+        scroll_layout.addWidget(title)
         
         # 下载设置组
         download_group = SettingCardGroup("下载设置", self)
@@ -140,7 +149,7 @@ class SettingsPanel(QWidget):
         download_group.addSettingCard(self.retry_card)
         download_group.addSettingCard(self.timeout_card)
         
-        layout.addWidget(download_group)
+        scroll_layout.addWidget(download_group)
         
         # 扫描设置组
         scan_group = SettingCardGroup("扫描设置", self)
@@ -154,9 +163,26 @@ class SettingsPanel(QWidget):
         )
         self.depth_card.setValue(self.config.max_depth)
         
-        scan_group.addSettingCard(self.depth_card)
+        self.scan_mode_config_item = OptionsConfigItem(
+            "scan", "scanMode", "dfs",
+            OptionsValidator(["dfs", "bfs"])
+        )
+        self.scan_mode_card = ComboBoxSettingCard(
+            self.scan_mode_config_item,
+            FIF.TILES,
+            "扫描模式",
+            "深度优先逐目录深入，广度优先逐层扫描",
+            texts=["深度优先", "广度优先"],
+            parent=self
+        )
+        scan_mode_map = {"dfs": "dfs", "bfs": "bfs"}
+        saved_mode = scan_mode_map.get(self.config.scan_mode, "dfs")
+        self.scan_mode_config_item.value = saved_mode
         
-        layout.addWidget(scan_group)
+        scan_group.addSettingCard(self.depth_card)
+        scan_group.addSettingCard(self.scan_mode_card)
+        
+        scroll_layout.addWidget(scan_group)
         
         # 界面设置组
         ui_group = SettingCardGroup("界面设置", self)
@@ -180,9 +206,15 @@ class SettingsPanel(QWidget):
         
         ui_group.addSettingCard(self.theme_card)
         
-        layout.addWidget(ui_group)
+        scroll_layout.addWidget(ui_group)
         
-        layout.addStretch()
+        scroll_layout.addStretch()
+        
+        scroll_area.setWidget(scroll_widget)
+        scroll_area.setStyleSheet("background: transparent;")
+        scroll_area.viewport().setStyleSheet("background: transparent;")
+        scroll_widget.setStyleSheet("background: transparent;")
+        layout.addWidget(scroll_area)
         
         # 连接信号
         self._connect_signals()
@@ -194,6 +226,7 @@ class SettingsPanel(QWidget):
         self.retry_card.valueChanged.connect(self._on_retry_changed)
         self.timeout_card.valueChanged.connect(self._on_timeout_changed)
         self.depth_card.valueChanged.connect(self._on_depth_changed)
+        self.scan_mode_config_item.valueChanged.connect(self._on_scan_mode_changed)
         self.theme_card.optionChanged.connect(self._on_theme_changed)
     
     def _on_folder_changed(self, folder: str):
@@ -220,6 +253,11 @@ class SettingsPanel(QWidget):
         self.config.max_depth = value
         self.config.save()
         self.config_changed.emit({"max_depth": value})
+    
+    def _on_scan_mode_changed(self, value):
+        self.config.scan_mode = value
+        self.config.save()
+        self.config_changed.emit({"scan_mode": value})
     
     def _on_theme_changed(self, configItem):
         theme_value = configItem.value

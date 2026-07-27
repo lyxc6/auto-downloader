@@ -46,13 +46,14 @@ class ScanController(QObject):
         
         return service
     
-    def start_scan(self, url: str, max_depth: Optional[int] = None, scanned_dirs: Optional[Set[str]] = None):
+    def start_scan(self, url: str, max_depth: Optional[int] = None, scanned_dirs: Optional[Set[str]] = None, scan_mode: str = "dfs"):
         """开始扫描
         
         Args:
             url: 扫描目标 URL
             max_depth: 最大递归深度
             scanned_dirs: 已扫描目录集合（续扫时跳过这些目录）
+            scan_mode: 扫描模式 "dfs" 深度优先 / "bfs" 广度优先
         """
         with self._lock:
             if self._is_scanning:
@@ -113,9 +114,14 @@ class ScanController(QObject):
                 self._service.on_dir_scanned = lambda dp: self.cache_manager.mark_dir_scanned(dp)
                 
                 # 执行扫描
-                _ = self._service.scan_directory(
-                    url, max_depth=max_depth
-                )
+                if scan_mode == "bfs":
+                    _ = self._service.scan_directory_bfs(
+                        url, max_depth=max_depth
+                    )
+                else:
+                    _ = self._service.scan_directory(
+                        url, max_depth=max_depth
+                    )
                 
                 # flush 剩余 buffer
                 if buffer:
@@ -153,6 +159,84 @@ class ScanController(QObject):
                         self._service = None
 
         self._thread = threading.Thread(target=_scan_worker, daemon=True)
+        self._thread.start()
+
+    def start_directory_scan(self, base_url: str, dir_path: str, parent_id: str):
+        """扫描单个目录（不递归到根，只扫描指定目录及其子目录）
+
+        Args:
+            base_url: 根 URL（如 https://example.com/index.php/224.html）
+            dir_path: 要扫描的目录路径（如 写真）
+            parent_id: 该目录的父 item_id
+        """
+        with self._lock:
+            if self._is_scanning:
+                self.log_message.emit("扫描已在进行中", "warning")
+                return
+            self._is_scanning = True
+
+        self.log_message.emit(f"刷新目录: {dir_path or '/'}", "header")
+        logger.info("开始单目录扫描: %s (dir=%s)", base_url, dir_path)
+
+        def _dir_scan_worker():
+            try:
+                self._service = self._create_service()
+
+                file_count = 0
+                dir_count = 0
+                buffer: list[DownloadItem] = []
+                last_flush = monotonic()
+                BATCH_SIZE = 50
+                FLUSH_INTERVAL = 0.1
+
+                def on_item_found(item: DownloadItem):
+                    nonlocal file_count, dir_count, last_flush, buffer
+                    if self.cache_manager.has_item(item.item_id):
+                        self.cache_manager.add_item(item)
+                        return
+                    self.cache_manager.add_item(item)
+                    if item.is_file:
+                        file_count += 1
+                    else:
+                        dir_count += 1
+                    buffer.append(item)
+                    if len(buffer) >= BATCH_SIZE or (monotonic() - last_flush) >= FLUSH_INTERVAL:
+                        self.items_found.emit(buffer)
+                        self.scan_progress.emit(file_count, dir_count)
+                        buffer = []
+                        last_flush = monotonic()
+
+                self._service.on_item_found = on_item_found
+                self._service.on_dir_scanned = lambda dp: self.cache_manager.mark_dir_scanned(dp)
+
+                self._service.scan_directory(
+                    base_url, dir_path=dir_path, parent_id=parent_id,
+                    depth=0, max_depth=self.config.max_depth
+                )
+
+                if buffer:
+                    self.items_found.emit(buffer)
+                    self.scan_progress.emit(file_count, dir_count)
+                    buffer = []
+
+                self.scan_completed.emit(file_count, dir_count)
+                logger.info("单目录扫描完成: 文件=%d 目录=%d", file_count, dir_count)
+
+                self.log_message.emit(f"目录刷新完成: 文件 {file_count}, 目录 {dir_count}", "success")
+                self.cache_manager.save()
+
+            except Exception as e:
+                logger.error("目录扫描失败", exc_info=True)
+                self.scan_error.emit(str(e))
+                self.log_message.emit(f"目录扫描失败: {e}", "error")
+            finally:
+                with self._lock:
+                    self._is_scanning = False
+                    if self._service is not None:
+                        self._service.close()
+                        self._service = None
+
+        self._thread = threading.Thread(target=_dir_scan_worker, daemon=True)
         self._thread.start()
 
     def cancel_scan(self):
