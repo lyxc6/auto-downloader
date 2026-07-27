@@ -22,6 +22,7 @@ class DownloadController(QObject):
     item_completed = Signal(str)               # item_id
     batch_completed = Signal(dict)             # stats_dict
     log_message = Signal(str, str)             # message, level
+    download_validated = Signal(list)          # List[DownloadItem]（验证通过）
     
     def __init__(self, config: AppConfig, parent: QObject | None = None):
         super().__init__(parent)
@@ -62,6 +63,22 @@ class DownloadController(QObject):
         
         return service
     
+    def start_download_with_validation(self, checked_files: List[DownloadItem]):
+        """带验证的下载启动
+        
+        Args:
+            checked_files: 已勾选的文件列表
+        """
+        if not checked_files:
+            self.log_message.emit("请先选择要下载的文件", "warning")
+            return
+        
+        # 发射验证通过信号，通知视图层添加到队列
+        self.download_validated.emit(checked_files)
+        
+        # 开始下载
+        self.start_download(checked_files)
+
     def start_download(self, items: List[DownloadItem]):
         """开始下载"""
         with self._lock:

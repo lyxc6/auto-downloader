@@ -21,6 +21,10 @@ class ScanController(QObject):
     scan_error = Signal(str)                 # error_message
     log_message = Signal(str, str)           # message, level
     
+    # 缓存/刷新相关信号
+    cache_load_completed = Signal(dict, set) # tree_data, checked_items（缓存加载完成）
+    refresh_cleanup = Signal(set)            # to_remove_ids（清理刷新产生的僵尸节点）
+    
     def __init__(self, config: AppConfig, cache_manager: CacheManager, parent: QObject | None = None):
         super().__init__(parent)
         self.config = config
@@ -29,6 +33,11 @@ class ScanController(QObject):
         self._thread: Optional[threading.Thread] = None
         self._is_scanning = False
         self._lock = threading.Lock()
+        
+        # 刷新状态
+        self._refreshing = False
+        self._refresh_old_ids: set[str] = set()
+        self._refresh_scanned_backup: Optional[set[str]] = None
     
     @property
     def is_scanning(self) -> bool:
@@ -46,7 +55,7 @@ class ScanController(QObject):
         
         return service
     
-    def start_scan(self, url: str, max_depth: Optional[int] = None, scanned_dirs: Optional[Set[str]] = None, scan_mode: str = "dfs"):
+    def start_scan(self, url: str, max_depth: Optional[int] = None, scanned_dirs: Optional[Set[str]] = None, scan_mode: str = "dfs", parallel: bool = False):
         """开始扫描
         
         Args:
@@ -54,6 +63,7 @@ class ScanController(QObject):
             max_depth: 最大递归深度
             scanned_dirs: 已扫描目录集合（续扫时跳过这些目录）
             scan_mode: 扫描模式 "dfs" 深度优先 / "bfs" 广度优先
+            parallel: 是否启用并行扫描
         """
         with self._lock:
             if self._is_scanning:
@@ -64,11 +74,12 @@ class ScanController(QObject):
         if max_depth is None:
             max_depth = self.config.max_depth
         
+        mode_str = "并行" if parallel else "串行"
         self.log_message.emit("=" * 50, "header")
-        self.log_message.emit("开始扫描目录结构", "header")
+        self.log_message.emit(f"开始扫描目录结构（{mode_str} {scan_mode.upper()}）", "header")
         self.log_message.emit("=" * 50, "header")
         
-        logger.info("开始扫描: %s (深度=%d)", url, max_depth)
+        logger.info("开始扫描: %s (深度=%d, 模式=%s_%s)", url, max_depth, mode_str, scan_mode)
         
         def _scan_worker():
             try:
@@ -114,14 +125,28 @@ class ScanController(QObject):
                 self._service.on_dir_scanned = lambda dp: self.cache_manager.mark_dir_scanned(dp)
                 
                 # 执行扫描
-                if scan_mode == "bfs":
-                    _ = self._service.scan_directory_bfs(
-                        url, max_depth=max_depth
-                    )
+                if parallel:
+                    # 并行模式
+                    if scan_mode == "bfs":
+                        _ = self._service.scan_directory_bfs_parallel(
+                            url, max_depth=max_depth, 
+                            max_workers=self.config.scan_max_workers
+                        )
+                    else:
+                        _ = self._service.scan_directory_parallel(
+                            url, max_depth=max_depth,
+                            max_workers=self.config.scan_max_workers
+                        )
                 else:
-                    _ = self._service.scan_directory(
-                        url, max_depth=max_depth
-                    )
+                    # 串行模式
+                    if scan_mode == "bfs":
+                        _ = self._service.scan_directory_bfs(
+                            url, max_depth=max_depth
+                        )
+                    else:
+                        _ = self._service.scan_directory(
+                            url, max_depth=max_depth
+                        )
                 
                 # flush 剩余 buffer
                 if buffer:
@@ -144,13 +169,15 @@ class ScanController(QObject):
                 self.log_message.emit(f"文件: {file_count}, 目录: {dir_count}", "info")
                 self.log_message.emit("=" * 50, "header")
                 
-                # 保存缓存
-                self.cache_manager.save()
+                # 内部处理（刷新分支清理等）
+                self._on_scan_completed_internal(file_count, dir_count)
                 
             except Exception as e:
                 logger.error("扫描失败", exc_info=True)
                 self.scan_error.emit(str(e))
                 self.log_message.emit(f"扫描失败: {e}", "error")
+                # 内部错误处理（恢复备份等）
+                self._on_scan_error_internal(str(e))
             finally:
                 with self._lock:
                     self._is_scanning = False
@@ -252,3 +279,114 @@ class ScanController(QObject):
             if self._service is not None:
                 self._service.close()
                 self._service = None
+
+    def start_scan_with_cache(self, url: str, scan_mode: str = "dfs", parallel: bool = False):
+        """智能扫描：自动处理缓存逻辑
+        
+        - 有缓存且扫描完成 → 发射 cache_load_completed 信号
+        - 有缓存但扫描未完成 → 断点续扫
+        - 无缓存 → 新扫描
+        """
+        # 相同URL且有缓存数据
+        if self.cache_manager.has_data_for(url):
+            logger.info("使用缓存数据恢复目录树: %s", url)
+            
+            # 发射缓存加载完成信号，由视图层处理UI更新
+            self.cache_load_completed.emit(
+                self.cache_manager.get_tree_data_snapshot(),
+                self.cache_manager.checked_items
+            )
+            
+            # 扫描完整 → 直接返回
+            if self.cache_manager.is_scan_complete():
+                self.log_message.emit("=" * 50, "header")
+                self.log_message.emit("从缓存加载目录结构", "info")
+                stats = self.cache_manager.get_stats()
+                self.log_message.emit(
+                    f"文件: {stats['total_files']}, 目录: {stats['total_dirs']}", "info"
+                )
+                self.log_message.emit("=" * 50, "header")
+                return
+            
+            # 扫描未完成 → 断点续扫
+            logger.info("检测到未完成扫描，继续从断点扫描: %s", url)
+            self.log_message.emit("=" * 50, "header")
+            self.log_message.emit("检测到未完成扫描，继续从断点扫描...", "warning")
+            stats = self.cache_manager.get_stats()
+            self.log_message.emit(
+                f"已缓存: 文件 {stats['total_files']}, 目录 {stats['total_dirs']}", "info"
+            )
+            self.log_message.emit("=" * 50, "header")
+            
+            self.cache_manager.set_scan_complete(False)
+            self.cache_manager.save()
+            self.start_scan(
+                url, scanned_dirs=self.cache_manager.get_scanned_dirs(),
+                scan_mode=scan_mode, parallel=parallel
+            )
+            return
+        
+        # 无缓存，全新扫描
+        self.cache_manager.clear()
+        self.cache_manager.set_url(url)
+        self.cache_manager.save()
+        self.start_scan(url, scan_mode=scan_mode, parallel=parallel)
+
+    def start_refresh(self, url: str, scan_mode: str = "dfs", parallel: bool = False):
+        """强制刷新扫描（忽略缓存，保留已选状态）"""
+        logger.info("强制刷新扫描: %s", url)
+        
+        # 备份 scanned_dirs，手动清空以强制重新扫描所有目录
+        self._refresh_scanned_backup = self.cache_manager.save_scanned_dirs_backup()
+        with self.cache_manager._lock:
+            self.cache_manager.scanned_dirs.clear()
+        self.cache_manager.clear_tree_data_only()
+        self.cache_manager.set_url(url)
+        self._refreshing = True
+        self._refresh_old_ids = set(self.cache_manager.tree_data.keys())
+        
+        self.start_scan(url, scan_mode=scan_mode, parallel=parallel)
+
+    def start_directory_refresh(self, base_url: str, item_id: str, 
+                                item_full_path: str, item_parent_id: str):
+        """刷新单个目录（清除其子项，重新扫描该目录）"""
+        if not base_url:
+            self.log_message.emit("无有效URL，请先执行一次扫描", "error")
+            return
+
+        logger.info("刷新单个目录: %s (path=%s)", item_id, item_full_path)
+
+        # 通知视图层移除子节点
+        removed_ids = set()  # 视图层负责实际移除
+        
+        # 清理缓存中的子节点
+        self.cache_manager.remove_directory_descendants(item_id)
+        self.cache_manager.mark_dir_unscanned(item_full_path)
+
+        # 开始单目录扫描
+        self.start_directory_scan(base_url, item_full_path, item_parent_id)
+
+    def _on_scan_completed_internal(self, file_count: int, dir_count: int):
+        """扫描完成处理（处理刷新分支的僵尸节点清理）"""
+        # 刷新分支：增量修剪僵尸节点 + 清理失效勾选
+        if self._refreshing:
+            new_ids = set(self.cache_manager.tree_data.keys())
+            to_remove = self._refresh_old_ids - new_ids
+            # 发射信号通知视图层清理僵尸节点
+            self.refresh_cleanup.emit(to_remove)
+            self.cache_manager.cleanup_checked()
+            self._refreshing = False
+            self._refresh_old_ids.clear()
+            self._refresh_scanned_backup = None
+        
+        # 保存缓存
+        self.cache_manager.save()
+
+    def _on_scan_error_internal(self, error_msg: str):
+        """扫描错误处理（恢复备份的 scanned_dirs）"""
+        if self._refresh_scanned_backup is not None:
+            self.cache_manager.restore_scanned_dirs(self._refresh_scanned_backup)
+            self._refresh_scanned_backup = None
+            self._refreshing = False
+            self._refresh_old_ids.clear()
+            logger.info("刷新失败，已恢复 scanned_dirs 备份")

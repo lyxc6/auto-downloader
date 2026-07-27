@@ -1,10 +1,10 @@
 """树形组件扩展"""
 from collections import deque
 from typing import Callable, Dict, List, Optional, Set
-from PySide6.QtWidgets import QTreeWidgetItem, QMenu, QHeaderView
+from PySide6.QtWidgets import QTreeWidgetItem, QHeaderView
 from PySide6.QtCore import Qt, Signal
 
-from qfluentwidgets import TreeWidget
+from qfluentwidgets import TreeWidget, RoundMenu
 
 from ...models import DownloadItem, ItemType
 from ...utils.helpers import format_size
@@ -355,9 +355,11 @@ class DownloadTreeWidget(TreeWidget):
         dl_item = self._all_items[item_id]
         if not dl_item.is_dir:
             return
-        menu = QMenu(self)
-        refresh_action = menu.addAction("🔄 刷新此目录")
+        menu = RoundMenu("", self)
+        from PySide6.QtGui import QAction
+        refresh_action = QAction("🔄 刷新此目录", self)
         refresh_action.triggered.connect(lambda checked=False, iid=item_id: self.refresh_dir_requested.emit(iid))
+        menu.addAction(refresh_action)
         menu.exec_(self.viewport().mapToGlobal(pos))
 
     def remove_children_of(self, dir_item_id: str) -> Set[str]:

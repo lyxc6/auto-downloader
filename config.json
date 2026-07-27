@@ -1,11 +1,12 @@
 {
   "download_dir": "C:/work/自动下载器/dist",
-  "max_workers": 3,
+  "max_workers": 10,
   "retry_times": 3,
   "timeout": 120,
   "max_depth": 10,
   "scan_delay": 0.15,
   "scan_mode": "bfs",
+  "scan_max_workers": 5,
   "theme": "dark",
   "language": "zh_CN",
   "window_width": 900,

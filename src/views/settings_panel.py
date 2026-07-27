@@ -163,6 +163,15 @@ class SettingsPanel(QWidget):
         )
         self.depth_card.setValue(self.config.max_depth)
         
+        self.scan_workers_card = SpinBoxSettingCard(
+            1, 10, 1,
+            FIF.PEOPLE,
+            "扫描并发数",
+            "同时扫描的目录数量（并行模式生效）",
+            self
+        )
+        self.scan_workers_card.setValue(self.config.scan_max_workers)
+        
         self.scan_mode_config_item = OptionsConfigItem(
             "scan", "scanMode", "dfs",
             OptionsValidator(["dfs", "bfs"])
@@ -180,6 +189,7 @@ class SettingsPanel(QWidget):
         self.scan_mode_config_item.value = saved_mode
         
         scan_group.addSettingCard(self.depth_card)
+        scan_group.addSettingCard(self.scan_workers_card)
         scan_group.addSettingCard(self.scan_mode_card)
         
         scroll_layout.addWidget(scan_group)
@@ -226,6 +236,7 @@ class SettingsPanel(QWidget):
         self.retry_card.valueChanged.connect(self._on_retry_changed)
         self.timeout_card.valueChanged.connect(self._on_timeout_changed)
         self.depth_card.valueChanged.connect(self._on_depth_changed)
+        self.scan_workers_card.valueChanged.connect(self._on_scan_workers_changed)
         self.scan_mode_config_item.valueChanged.connect(self._on_scan_mode_changed)
         self.theme_card.optionChanged.connect(self._on_theme_changed)
     
@@ -253,6 +264,11 @@ class SettingsPanel(QWidget):
         self.config.max_depth = value
         self.config.save()
         self.config_changed.emit({"max_depth": value})
+    
+    def _on_scan_workers_changed(self, value: int):
+        self.config.scan_max_workers = value
+        self.config.save()
+        self.config_changed.emit({"scan_max_workers": value})
     
     def _on_scan_mode_changed(self, value):
         self.config.scan_mode = value
