@@ -31,6 +31,10 @@ ENV/
 *.swp
 *.swo
 
+# AI
+.agents
+.opencode
+
 # Runtime
 cache.json
 *.log
