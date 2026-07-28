@@ -205,11 +205,13 @@ class DownloadPanel(QWidget):
         self.stop_download_btn.setEnabled(is_downloading)
         self.progress_bar.setVisible(is_downloading)
     
-    def update_stats(self, total_files: int, total_dirs: int, checked: int):
+    def update_stats(self, total_files: int, total_dirs: int, checked: int,
+                     dirs_scanned: int = -1):
         """更新统计信息"""
-        self.stats_label.setText(
-            f"文件: {total_files} | 目录: {total_dirs} | 已选: {checked}"
-        )
+        text = f"文件: {total_files} | 目录: {total_dirs} | 已选: {checked}"
+        if dirs_scanned >= 0:
+            text += f" | 扫描: {dirs_scanned}"
+        self.stats_label.setText(text)
     
     def update_progress(self, current: int, total: int):
         """更新进度"""

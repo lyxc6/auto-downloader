@@ -22,12 +22,18 @@ class ScanService:
         self._lock = threading.Lock()
         self._scanned_dirs: Set[str] = set()
         self._scanned_dirs_lock = threading.Lock()  # 保护 _scanned_dirs 的并发访问
-        
+
         # 回调函数
         self.on_item_found: Optional[Callable[[DownloadItem], None]] = None
         self.on_error: Optional[Callable[[str], None]] = None
         self.on_log: Optional[Callable[[str, str], None]] = None
         self.on_dir_scanned: Optional[Callable[[str], None]] = None
+
+        # 并行模式控制
+        self.parallel_mode = False  # 并行模式下抑制单目录日志
+        self.on_progress_update: Optional[Callable[[int, int], None]] = None  # (dirs_completed, dirs_total_hint)
+        self._parallel_dirs_completed = 0
+        self._progress_lock = threading.Lock()
     
     @property
     def session(self) -> requests.Session:
@@ -55,7 +61,17 @@ class ScanService:
     def set_scanned_dirs(self, dirs: Set[str]):
         """设置已扫描目录集合（续扫时跳过这些目录）"""
         self._scanned_dirs = set(dirs)
-    
+
+    def _emit_dir_complete(self):
+        """并行模式下，每完成一个目录递增计数器并按条件触发进度回调"""
+        if not self.parallel_mode:
+            return
+        with self._progress_lock:
+            self._parallel_dirs_completed += 1
+            count = self._parallel_dirs_completed
+        if self.on_progress_update and count % 5 == 0:
+            self.on_progress_update(count, 0)
+
     def get_page(self, url: str, retries: int = 3) -> Optional[str]:
         """获取页面内容"""
         for i in range(retries + 1):
@@ -428,13 +444,15 @@ class ScanService:
 
             display_path = dir_path or "/"
             if self.on_log:
-                if len(dirs) > 0 or len(files) > 0:
-                    self.on_log(f"正在扫描: {display_path}", "info")
-                else:
-                    self.on_log(f"正在扫描: {display_path}  (空目录)", "dim")
+                if not self.parallel_mode:
+                    if len(dirs) > 0 or len(files) > 0:
+                        self.on_log(f"正在扫描: {display_path}", "info")
+                    else:
+                        self.on_log(f"正在扫描: {display_path}  (空目录)", "dim")
 
             if self.on_log and (dirs or files):
-                self.on_log(f"  ├─ 子目录: {len(dirs)} 个, 文件: {len(files)} 个", "info")
+                if not self.parallel_mode:
+                    self.on_log(f"  ├─ 子目录: {len(dirs)} 个, 文件: {len(files)} 个", "info")
 
             # 处理当前目录的文件
             for name, file_url in files:
@@ -479,6 +497,7 @@ class ScanService:
             # 并行递归扫描子目录（复用同一个线程池）
             if not self.is_cancelled() and dirs:
                 futures = {}
+                root_futures: dict = {}  # depth=0 的直接子目录 future -> (path, name)
                 for full_path, name in dirs:
                     if self.is_cancelled():
                         break
@@ -488,6 +507,8 @@ class ScanService:
                         depth + 1, max_depth, max_workers, _executor
                     )
                     futures[future] = full_path
+                    if depth == 0:
+                        root_futures[future] = (full_path, name)
 
                 for future in as_completed(futures):
                     if self.is_cancelled():
@@ -498,6 +519,17 @@ class ScanService:
                             all_items.extend(sub_items)
                     except Exception as e:
                         logger.error("并行扫描子目录失败: %s", e)
+                    finally:
+                        self._emit_dir_complete()
+
+                # 一级目录全部完成通知
+                if not self.is_cancelled() and root_futures and self.on_log:
+                    completed_roots = [name for _, name in root_futures.values()]
+                    self.on_log(
+                        f"✓ 一级目录扫描完成 ({len(completed_roots)} 个): "
+                        + ", ".join(completed_roots),
+                        "success"
+                    )
 
             # 标记当前目录为已完全扫描
             if not self.is_cancelled():
@@ -530,12 +562,13 @@ class ScanService:
         
         executor = ThreadPoolExecutor(max_workers=max_workers)
         try:
+            root_dirs: list[str] = []  # 一级目录路径（depth=1）
             while queue and not self.is_cancelled():
                 # 收集当前层任务
                 current_level: list[tuple[str, str, int]] = []
                 while queue:
                     current_level.append(queue.popleft())
-                
+
                 # 并行处理当前层（复用同一个线程池）
                 futures = {}
                 for path, pid, d in current_level:
@@ -551,7 +584,7 @@ class ScanService:
                         base_url, path, pid, d
                     )
                     futures[future] = (path, pid, d)
-                
+
                 # 等待当前层完成
                 for future in as_completed(futures):
                     if self.is_cancelled():
@@ -559,7 +592,11 @@ class ScanService:
                     try:
                         dirs, files = future.result()
                         path, pid, d = futures[future]
-                        
+
+                        # 记录一级目录
+                        if d == 1 and path not in root_dirs:
+                            root_dirs.append(path)
+
                         # 处理文件
                         for name, file_url in files:
                             if self.is_cancelled():
@@ -577,7 +614,7 @@ class ScanService:
                                 all_items.append(item)
                             if self.on_item_found:
                                 self.on_item_found(item)
-                        
+
                         # 处理子目录并加入队列
                         for full_path, name in dirs:
                             if self.is_cancelled():
@@ -596,16 +633,28 @@ class ScanService:
                             if self.on_item_found:
                                 self.on_item_found(item)
                             queue.append((full_path, full_path, d + 1))
-                        
+
                         # 标记目录已扫描
                         if not self.is_cancelled():
                             with self._scanned_dirs_lock:
                                 self._scanned_dirs.add(path)
                             if self.on_dir_scanned:
                                 self.on_dir_scanned(path)
-                    
+
                     except Exception as e:
                         logger.error("并行扫描目录失败: %s", e)
+                    finally:
+                        self._emit_dir_complete()
+
+                # 一层完成通知（depth=1 层 = 一级目录）
+                if (not self.is_cancelled() and root_dirs
+                        and not queue and self.on_log):
+                    root_names = [p.split("/")[-1] for p in root_dirs]
+                    self.on_log(
+                        f"✓ 一级目录扫描完成 ({len(root_names)} 个): "
+                        + ", ".join(root_names),
+                        "success"
+                    )
         finally:
             executor.shutdown(wait=False)
         
@@ -657,7 +706,7 @@ class ScanService:
                             all_files.append((name, file_url))
                 
                 total = self.get_total_pages(html)
-                if self.on_log:
+                if self.on_log and not self.parallel_mode:
                     self.on_log(f"  获取页面 {page}/{total}", "dim")
                 
                 if page >= total:

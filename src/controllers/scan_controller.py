@@ -84,6 +84,7 @@ class ScanController(QObject):
         def _scan_worker():
             try:
                 self._service = self._create_service()
+                self._service.parallel_mode = parallel
                 
                 # 续扫：传入已扫描目录集合
                 if scanned_dirs:
@@ -91,14 +92,19 @@ class ScanController(QObject):
                 
                 file_count = 0
                 dir_count = 0
+                dirs_found = 0
+                dirs_completed = 0
                 buffer: list[DownloadItem] = []
                 last_flush = monotonic()
+                last_progress_log = monotonic()
                 BATCH_SIZE = 50
                 FLUSH_INTERVAL = 0.1
+                PROGRESS_LOG_INTERVAL = 0.3
+                PROGRESS_DIR_INTERVAL = 5
                 _cb_lock = threading.Lock()
                 
                 def on_item_found(item: DownloadItem):
-                    nonlocal file_count, dir_count, last_flush, buffer
+                    nonlocal file_count, dir_count, dirs_found, last_flush, buffer
                     
                     # 续扫去重：原子检查+添加，已存在的 item 不覆盖（避免并行竞态损坏 parent_id）
                     if not self.cache_manager.try_add_item(item):
@@ -109,6 +115,7 @@ class ScanController(QObject):
                             file_count += 1
                         else:
                             dir_count += 1
+                            dirs_found += 1
                         
                         buffer.append(item)
                         
@@ -118,9 +125,24 @@ class ScanController(QObject):
                             buffer = []
                             last_flush = monotonic()
                 
+                def on_dir_scanned(dir_path: str):
+                    nonlocal dirs_completed, last_progress_log
+                    self.cache_manager.mark_dir_scanned(dir_path)
+                    with _cb_lock:
+                        dirs_completed += 1
+                        now = monotonic()
+                        if (dirs_completed % PROGRESS_DIR_INTERVAL == 0
+                                or (now - last_progress_log) >= PROGRESS_LOG_INTERVAL):
+                            self.log_message.emit(
+                                f"扫描进度: 已完成 {dirs_completed}/{dirs_found} 个目录"
+                                f" | 发现 {file_count} 个文件",
+                                "info"
+                            )
+                            last_progress_log = now
+                
                 # 设置回调
                 self._service.on_item_found = on_item_found
-                self._service.on_dir_scanned = lambda dp: self.cache_manager.mark_dir_scanned(dp)
+                self._service.on_dir_scanned = on_dir_scanned
                 
                 # 执行扫描
                 if parallel:
@@ -152,6 +174,14 @@ class ScanController(QObject):
                         self.items_found.emit(list(buffer))
                         self.scan_progress.emit(file_count, dir_count)
                         buffer = []
+                
+                # 扫描进度汇总
+                if parallel:
+                    self.log_message.emit(
+                        f"扫描进度: 全部完成 {dirs_completed} 个目录"
+                        f" | 发现 {file_count} 个文件",
+                        "success"
+                    )
                 
                 # 标记扫描完成状态（仅在未取消时）
                 if not self._service.is_cancelled():
