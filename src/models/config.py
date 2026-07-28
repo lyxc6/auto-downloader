@@ -30,6 +30,11 @@ class AppConfig:
     window_width: int = 1400
     window_height: int = 900
     
+    # 更新设置
+    update_channel: str = "stable"  # "stable" 稳定版 / "test" 测试版
+    auto_check_update: bool = True  # 启动时自动检查更新
+    last_update_check_time: str = ""  # 上次检查更新的时间
+    
     # 最近使用的URL
     last_url: str = "https://www.flyingfry.cc/index.php/224.html"
     

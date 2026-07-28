@@ -26,6 +26,22 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
+      - name: Generate build info
+        run: |
+          $sha = git rev-parse --short HEAD
+          $buildTime = Get-Date -Format "yyyy-MM-ddTHH:%M:%SZ" -AsUTC
+          $channel = if ($env:GITHUB_REF -match "^refs/tags/v") { "stable" } else { "test" }
+          
+          $content = @"
+          """构建元数据 - 由 CI/CD 自动生成"""
+          
+          BUILD_TIME: str = "$buildTime"
+          GIT_SHA: str = "$sha"
+          BUILD_CHANNEL: str = "$channel"
+          "@
+          
+          Set-Content -Path "src/_build_info.py" -Value $content -Encoding UTF8
+
       - name: Build with PyInstaller
         run: pyinstaller 自动下载器.spec
 

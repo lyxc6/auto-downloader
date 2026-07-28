@@ -5,7 +5,7 @@ from PySide6.QtCore import Qt, Signal
 from qfluentwidgets import (
     CardWidget, SettingCardGroup,
     SwitchSettingCard, ComboBoxSettingCard,
-    SettingCard, PushButton,
+    SettingCard, PushButton, PrimaryPushButton,
     StrongBodyLabel, BodyLabel,
     FluentIcon as FIF,
     OptionsSettingCard,
@@ -16,6 +16,7 @@ from qfluentwidgets import (
 from qfluentwidgets.common.config import OptionsConfigItem, OptionsValidator
 
 from ..models import AppConfig
+from .. import __version__
 
 
 class SpinBoxSettingCard(SettingCard):
@@ -82,6 +83,7 @@ class SettingsPanel(QWidget):
     # 信号定义
     theme_changed = Signal(str)
     config_changed = Signal(dict)
+    check_update_requested = Signal(str, str, str)  # channel, version, last_check_time
     
     def __init__(self, config: AppConfig, parent=None):
         super().__init__(parent)
@@ -218,6 +220,66 @@ class SettingsPanel(QWidget):
         
         scroll_layout.addWidget(ui_group)
         
+        # 软件更新组
+        update_group = SettingCardGroup("软件更新", self)
+        
+        # 版本信息卡片
+        self.version_card = SettingCard(
+            FIF.INFO,
+            "当前版本",
+            f"v{__version__}",
+            self
+        )
+        
+        # 更新渠道卡片
+        self.channel_config_item = OptionsConfigItem(
+            "update", "channel", "stable",
+            OptionsValidator(["stable", "test"])
+        )
+        self.channel_card = ComboBoxSettingCard(
+            self.channel_config_item,
+            FIF.SYNC,
+            "更新渠道",
+            "选择接收的更新类型",
+            texts=["稳定版", "测试版"],
+            parent=self
+        )
+        channel_map = {"stable": "stable", "test": "test"}
+        saved_channel = channel_map.get(self.config.update_channel, "stable")
+        self.channel_config_item.value = saved_channel
+        
+        # 自动检查更新卡片
+        self.auto_check_card = SettingCard(
+            FIF.UPDATE,
+            "自动检查更新",
+            "启动时自动检查是否有新版本",
+            self
+        )
+        from qfluentwidgets import Switch
+        self.auto_check_switch = Switch(self.auto_check_card)
+        self.auto_check_switch.setChecked(self.config.auto_check_update)
+        self.auto_check_card.hBoxLayout.addWidget(self.auto_check_switch, 0, Qt.AlignRight)
+        self.auto_check_card.hBoxLayout.addSpacing(16)
+        
+        # 检查更新按钮卡片
+        self.check_btn_card = SettingCard(
+            FIF.SYNC,
+            "检查更新",
+            "手动检查是否有新版本",
+            self
+        )
+        self.check_btn = PrimaryPushButton("检查更新", self.check_btn_card)
+        self.check_btn.setMinimumWidth(120)
+        self.check_btn_card.hBoxLayout.addWidget(self.check_btn, 0, Qt.AlignRight)
+        self.check_btn_card.hBoxLayout.addSpacing(16)
+        
+        update_group.addSettingCard(self.version_card)
+        update_group.addSettingCard(self.channel_card)
+        update_group.addSettingCard(self.auto_check_card)
+        update_group.addSettingCard(self.check_btn_card)
+        
+        scroll_layout.addWidget(update_group)
+        
         scroll_layout.addStretch()
         
         scroll_area.setWidget(scroll_widget)
@@ -239,6 +301,9 @@ class SettingsPanel(QWidget):
         self.scan_workers_card.valueChanged.connect(self._on_scan_workers_changed)
         self.scan_mode_config_item.valueChanged.connect(self._on_scan_mode_changed)
         self.theme_card.optionChanged.connect(self._on_theme_changed)
+        self.channel_config_item.valueChanged.connect(self._on_channel_changed)
+        self.auto_check_switch.checkedChanged.connect(self._on_auto_check_changed)
+        self.check_btn.clicked.connect(self._on_check_update_clicked)
     
     def _on_folder_changed(self, folder: str):
         self.config.download_dir = folder
@@ -282,3 +347,28 @@ class SettingsPanel(QWidget):
         self.config.theme = theme
         self.config.save()
         self.theme_changed.emit(theme)
+    
+    def _on_channel_changed(self, value):
+        self.config.update_channel = value
+        self.config.save()
+        self.config_changed.emit({"update_channel": value})
+    
+    def _on_auto_check_changed(self, checked: bool):
+        self.config.auto_check_update = checked
+        self.config.save()
+        self.config_changed.emit({"auto_check_update": checked})
+    
+    def _on_check_update_clicked(self):
+        """检查更新按钮点击"""
+        self.check_btn.setEnabled(False)
+        self.check_btn.setText("检查中...")
+        self.check_update_requested.emit(
+            self.config.update_channel,
+            __version__,
+            self.config.last_update_check_time
+        )
+    
+    def on_check_update_finished(self):
+        """更新检查完成（由外部调用）"""
+        self.check_btn.setEnabled(True)
+        self.check_btn.setText("检查更新")

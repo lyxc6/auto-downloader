@@ -11,7 +11,9 @@ from qfluentwidgets import InfoBar, InfoBarPosition
 from .utils.logger import setup_logging
 from .models import AppConfig, CacheManager, DownloadItem
 from .controllers import DownloadController, ScanController
+from .services import UpdateChecker
 from .views import MainWindow
+from . import __version__
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +34,7 @@ class Application:
         # 创建QApplication
         self.app = QApplication(sys.argv)
         self.app.setApplicationName("网站文件自动下载器")
-        self.app.setApplicationVersion("2.0.0")
+        self.app.setApplicationVersion(__version__)
         
         # 加载配置
         self.config = AppConfig.load()
@@ -44,6 +46,9 @@ class Application:
         # 创建控制器
         self.download_controller = DownloadController(self.config)
         self.scan_controller = ScanController(self.config, self.cache_manager)
+        
+        # 创建更新检查器
+        self.update_checker = UpdateChecker()
         
         # 创建主窗口
         self.window = MainWindow(self.config)
@@ -97,7 +102,12 @@ class Application:
         # 设置面板信号
         self.window.settingsPanel.theme_changed.connect(self.window.apply_theme)
         self.window.settingsPanel.config_changed.connect(self._on_config_changed)
+        self.window.settingsPanel.check_update_requested.connect(self._on_check_update_requested)
         self.window.closing.connect(self._on_app_closing)
+        
+        # 更新检查器信号
+        self.update_checker.check_finished.connect(self._on_update_check_finished)
+        self.update_checker.check_error.connect(self._on_update_check_error)
         
         self.window.downloadPanel.tree_widget.set_check_sync_callback(self._on_checked_changed)
     
@@ -271,6 +281,64 @@ class Application:
     
     # ==================== 其他回调 ====================
     
+    def _on_check_update_requested(self, channel: str, version: str, last_check_time: str):
+        """手动检查更新请求"""
+        self.update_checker.check_update(channel, version, last_check_time)
+    
+    def _on_update_check_finished(self, result: dict):
+        """更新检查完成"""
+        self.window.settingsPanel.on_check_update_finished()
+        
+        if result.get("error"):
+            InfoBar.warning(
+                title="检查更新",
+                content=result["error"],
+                parent=self.window,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+            )
+            return
+        
+        if result.get("has_update"):
+            version = result.get("version", "")
+            url = result.get("url", "")
+            notes = result.get("notes", "")
+            
+            content = f"发现新版本 v{version}"
+            if notes:
+                content += f"\n{notes[:100]}..."
+            
+            InfoBar.success(
+                title="发现新版本",
+                content=content,
+                parent=self.window,
+                position=InfoBarPosition.TOP,
+                duration=5000,
+            )
+            
+            # 更新上次检查时间
+            self.config.last_update_check_time = self.update_checker.get_current_check_time()
+            self.config.save()
+        else:
+            InfoBar.info(
+                title="检查更新",
+                content="已是最新版本",
+                parent=self.window,
+                position=InfoBarPosition.TOP,
+                duration=2000,
+            )
+    
+    def _on_update_check_error(self, error_msg: str):
+        """更新检查失败"""
+        self.window.settingsPanel.on_check_update_finished()
+        InfoBar.warning(
+            title="检查更新",
+            content=f"检查失败: {error_msg}",
+            parent=self.window,
+            position=InfoBarPosition.TOP,
+            duration=3000,
+        )
+    
     def _signal_handler(self, sig: int, frame: object) -> None:
         """信号处理器：只置位事件，不在信号上下文做 I/O 或退出"""
         self._shutdown_event.set()
@@ -326,6 +394,19 @@ class Application:
         """运行应用"""
         logger.info("显示主窗口")
         self.window.show()
+        
+        # 启动时自动检查更新
+        if self.config.auto_check_update:
+            QTimer.singleShot(2000, self._auto_check_update)
+        
         result = self.app.exec()
         logger.info("应用事件循环结束")
         return result
+    
+    def _auto_check_update(self):
+        """启动时自动检查更新"""
+        self.update_checker.check_update(
+            self.config.update_channel,
+            __version__,
+            self.config.last_update_check_time
+        )
