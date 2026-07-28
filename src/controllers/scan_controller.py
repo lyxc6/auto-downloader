@@ -100,12 +100,9 @@ class ScanController(QObject):
                 def on_item_found(item: DownloadItem):
                     nonlocal file_count, dir_count, last_flush, buffer
                     
-                    # 续扫去重：已存在的 item 不覆盖（避免并行竞态损坏 parent_id）
-                    if self.cache_manager.has_item(item.item_id):
+                    # 续扫去重：原子检查+添加，已存在的 item 不覆盖（避免并行竞态损坏 parent_id）
+                    if not self.cache_manager.try_add_item(item):
                         return
-                    
-                    # 添加到缓存
-                    self.cache_manager.add_item(item)
                     
                     with _cb_lock:
                         if item.is_file:
@@ -221,9 +218,8 @@ class ScanController(QObject):
 
                 def on_item_found(item: DownloadItem):
                     nonlocal file_count, dir_count, last_flush, buffer
-                    if self.cache_manager.has_item(item.item_id):
+                    if not self.cache_manager.try_add_item(item):
                         return
-                    self.cache_manager.add_item(item)
                     with _cb_lock:
                         if item.is_file:
                             file_count += 1

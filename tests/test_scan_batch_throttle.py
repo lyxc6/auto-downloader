@@ -73,6 +73,7 @@ def make_controller(monkeypatch):
         cache = type("C", (), {
             "add_item": lambda self, item: None,
             "has_item": lambda self, item_id: False,
+            "try_add_item": lambda self, item: True,
             "save": lambda self, url="": True,
             "mark_dir_scanned": lambda self, dp: None,
             "set_scan_complete": lambda self, complete: None,

@@ -20,6 +20,9 @@ class CacheManager:
         self.scan_complete: bool = False
         self.url: str = ""
         self._lock = __import__('threading').Lock()
+        # 增量计数器（避免 get_stats 遍历 tree_data）
+        self._file_count = 0
+        self._dir_count = 0
     
     def load(self) -> bool:
         """加载缓存"""
@@ -35,9 +38,16 @@ class CacheManager:
             
             with self._lock:
                 self.tree_data.clear()
+                self._file_count = 0
+                self._dir_count = 0
                 for item_id, item_dict in tree_data.items():
                     try:
-                        self.tree_data[str(item_id)] = DownloadItem.from_dict(cast(dict[str, Any], item_dict))
+                        item = DownloadItem.from_dict(cast(dict[str, Any], item_dict))
+                        self.tree_data[str(item_id)] = item
+                        if item.is_file:
+                            self._file_count += 1
+                        elif item.is_dir:
+                            self._dir_count += 1
                     except Exception as e:
                         logger.warning("解析缓存项 %s 失败: %s", str(item_id), e)
             
@@ -99,12 +109,16 @@ class CacheManager:
             self.scanned_dirs.clear()
             self.scan_complete = False
             self.url = ""
+            self._file_count = 0
+            self._dir_count = 0
     
     def clear_tree_data_only(self):
         """仅清空 tree_data 和 scan_complete，保留 checked_items、scanned_dirs、url（用于刷新场景）"""
         with self._lock:
             self.tree_data.clear()
             self.scan_complete = False
+            self._file_count = 0
+            self._dir_count = 0
 
     def save_scanned_dirs_backup(self) -> Set[str]:
         """返回 scanned_dirs 快照（刷新前备份用）"""
@@ -187,12 +201,35 @@ class CacheManager:
     def add_item(self, item: DownloadItem):
         """添加项目"""
         with self._lock:
+            is_new = item.item_id not in self.tree_data
             self.tree_data[item.item_id] = item
+            if is_new:
+                if item.is_file:
+                    self._file_count += 1
+                elif item.is_dir:
+                    self._dir_count += 1
+
+    def try_add_item(self, item: DownloadItem) -> bool:
+        """原子检查+添加（返回 True 表示真正新增，False 表示已存在跳过）"""
+        with self._lock:
+            if item.item_id in self.tree_data:
+                return False
+            self.tree_data[item.item_id] = item
+            if item.is_file:
+                self._file_count += 1
+            elif item.is_dir:
+                self._dir_count += 1
+            return True
     
     def remove_item(self, item_id: str):
         """移除项目"""
         with self._lock:
-            self.tree_data.pop(item_id, None)
+            removed = self.tree_data.pop(item_id, None)
+            if removed is not None:
+                if removed.is_file:
+                    self._file_count -= 1
+                elif removed.is_dir:
+                    self._dir_count -= 1
             self.checked_items.discard(item_id)
 
     def remove_directory_descendants(self, dir_item_id: str) -> Set[str]:
@@ -211,7 +248,12 @@ class CacheManager:
                     if child_item.parent_id == cid:
                         queue.append(child_id)
             for rid in to_remove:
-                self.tree_data.pop(rid, None)
+                removed = self.tree_data.pop(rid, None)
+                if removed is not None:
+                    if removed.is_file:
+                        self._file_count -= 1
+                    elif removed.is_dir:
+                        self._dir_count -= 1
                 self.checked_items.discard(rid)
             self.scanned_dirs.discard(dir_item_id)
             return to_remove
@@ -245,13 +287,10 @@ class CacheManager:
             ]
     
     def get_stats(self) -> Dict[str, int]:
-        """获取统计信息"""
+        """获取统计信息（O(1)，使用增量计数器）"""
         with self._lock:
-            total_files = sum(1 for item in self.tree_data.values() if item.is_file)
-            total_dirs = sum(1 for item in self.tree_data.values() if item.is_dir)
-            checked_count = len(self.checked_items)
             return {
-                "total_files": total_files,
-                "total_dirs": total_dirs,
-                "checked_count": checked_count
+                "total_files": self._file_count,
+                "total_dirs": self._dir_count,
+                "checked_count": len(self.checked_items)
             }
