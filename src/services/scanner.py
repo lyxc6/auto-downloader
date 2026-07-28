@@ -431,13 +431,13 @@ class ScanService:
             dirs, files = self._get_all_pages_threadsafe(base_url, dir_path)
 
             display_path = dir_path or "/"
-            if self.on_log and not self.parallel_mode:
+            if self.on_log:
                 if len(dirs) > 0 or len(files) > 0:
                     self.on_log(f"正在扫描: {display_path}", "info")
                 else:
                     self.on_log(f"正在扫描: {display_path}  (空目录)", "dim")
 
-            if self.on_log and (dirs or files) and not self.parallel_mode:
+            if self.on_log and (dirs or files):
                 self.on_log(f"  ├─ 子目录: {len(dirs)} 个, 文件: {len(files)} 个", "info")
 
             # 处理当前目录的文件
