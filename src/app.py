@@ -67,6 +67,12 @@ class Application:
         self._auto_save_timer.setInterval(30000)
         self._auto_save_timer.timeout.connect(self.cache_manager.save)
 
+        # URL 输入防抖定时器（用于更新扫描按钮状态）
+        self._scan_button_debounce_timer = QTimer(self.window)
+        self._scan_button_debounce_timer.setSingleShot(True)
+        self._scan_button_debounce_timer.setInterval(500)
+        self._scan_button_debounce_timer.timeout.connect(self._update_scan_button)
+
     def _connect_signals(self):
         """连接信号"""
         # 下载面板信号
@@ -111,6 +117,9 @@ class Application:
 
         self.window.downloadPanel.tree_widget.set_check_sync_callback(self._on_checked_changed)
 
+        # URL 输入变化 → 防抖更新扫描按钮状态
+        self.window.downloadPanel.url_input.textChanged.connect(self._on_url_text_changed)
+
     def _start_auto_save(self):
         self._auto_save_timer.start()
 
@@ -123,6 +132,26 @@ class Application:
         self.cache_manager.set_checked_items(checked_ids)
         stats = self.cache_manager.get_stats()
         self.window.downloadPanel.update_stats(stats["total_files"], stats["total_dirs"], stats["checked_count"])
+
+    def _on_url_text_changed(self):
+        """URL 输入变化防抖 → 更新扫描按钮状态"""
+        self._scan_button_debounce_timer.start()
+
+    def _update_scan_button(self):
+        """根据缓存状态更新扫描按钮文字（扫描目录 / 继续扫描）"""
+        url = self.window.downloadPanel.url_input.text().strip()
+        has_cache = self.cache_manager.has_data_for(url)
+        scan_done = self.cache_manager.is_scan_complete()
+        self.window.downloadPanel.set_scan_button_mode(has_cache and not scan_done)
+
+    def _auto_load_cache(self):
+        """启动时自动加载缓存目录树到 UI"""
+        url = self.config.last_url
+        if url and self.cache_manager.has_data_for(url):
+            logger.info("启动时自动加载缓存: %s", url)
+            self.scan_controller.cache_load_completed.emit(
+                self.cache_manager.get_tree_data_snapshot(), self.cache_manager.checked_items
+            )
 
     # ==================== 扫描相关回调 ====================
 
@@ -191,6 +220,10 @@ class Application:
         stats = self.cache_manager.get_stats()
         self.window.downloadPanel.update_stats(stats["total_files"], stats["total_dirs"], stats["checked_count"])
         self.window.downloadPanel.download_btn.setEnabled(stats["total_files"] > 0)
+        self._update_scan_button()
+
+        # 显示目录扫描状态
+        self.window.downloadPanel.tree_widget.apply_scan_status(self.cache_manager.get_unscanned_dirs())
 
     def _on_refresh_cleanup(self, to_remove: set):
         """刷新清理：移除僵尸节点"""
@@ -214,6 +247,10 @@ class Application:
         self.window.downloadPanel.update_stats(stats["total_files"], stats["total_dirs"], stats["checked_count"])
 
         self._stop_auto_save_if_idle()
+        self._update_scan_button()
+
+        # 刷新目录扫描状态
+        self.window.downloadPanel.tree_widget.apply_scan_status(self.cache_manager.get_unscanned_dirs())
 
     def _on_scan_error(self, error_msg: str):
         """扫描失败"""
@@ -374,6 +411,10 @@ class Application:
         """运行应用"""
         logger.info("显示主窗口")
         self.window.show()
+
+        # 启动时自动加载缓存目录树
+        self._auto_load_cache()
+        self._update_scan_button()
 
         # 启动时自动检查更新
         if self.config.auto_check_update:

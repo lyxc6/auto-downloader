@@ -118,6 +118,10 @@ class ScanController(QObject):
                     if not self.cache_manager.try_add_item(item):
                         return
 
+                    # 发现目录时标记为未完成（扫描完成后会由 on_dir_scanned 标记为已完成）
+                    if item.is_dir:
+                        self.cache_manager.mark_dir_unscanned(item.full_path)
+
                     with _cb_lock:
                         if item.is_file:
                             file_count += 1
@@ -251,6 +255,9 @@ class ScanController(QObject):
                     nonlocal file_count, dir_count, last_flush, buffer
                     if not self.cache_manager.try_add_item(item):
                         return
+                    # 发现目录时标记为未完成
+                    if item.is_dir:
+                        self.cache_manager.mark_dir_unscanned(item.full_path)
                     with _cb_lock:
                         if item.is_file:
                             file_count += 1
@@ -333,14 +340,19 @@ class ScanController(QObject):
                 stats = self.cache_manager.get_stats()
                 self.log_message.emit(f"文件: {stats['total_files']}, 目录: {stats['total_dirs']}", "info")
                 self.log_message.emit("=" * 50, "header")
+                self.scan_completed.emit(stats["total_files"], stats["total_dirs"])
                 return
 
             # 扫描未完成 → 断点续扫
-            logger.info("检测到未完成扫描，继续从断点扫描: %s", url)
-            self.log_message.emit("=" * 50, "header")
-            self.log_message.emit("检测到未完成扫描，继续从断点扫描...", "warning")
+            scanned_dirs = self.cache_manager.get_scanned_dirs()
+            logger.info("检测到未完成扫描，继续从断点扫描: %s (已扫描 %d 个目录)", url, len(scanned_dirs))
             stats = self.cache_manager.get_stats()
-            self.log_message.emit(f"已缓存: 文件 {stats['total_files']}, 目录 {stats['total_dirs']}", "info")
+            self.log_message.emit("=" * 50, "header")
+            self.log_message.emit("▶▶▶ 检测到未完成扫描，继续从断点续扫", "success")
+            self.log_message.emit(
+                f"已扫描目录: {len(scanned_dirs)} 个 | 已缓存: 文件 {stats['total_files']}, 目录 {stats['total_dirs']}",
+                "info",
+            )
             self.log_message.emit("=" * 50, "header")
 
             self.cache_manager.set_scan_complete(False)

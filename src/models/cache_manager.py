@@ -19,6 +19,7 @@ class CacheManager:
         self.tree_data: dict[str, DownloadItem] = {}
         self.checked_items: set[str] = set()
         self.scanned_dirs: set[str] = set()
+        self.unscanned_dirs: set[str] = set()
         self.scan_complete: bool = False
         self.url: str = ""
         self._lock = __import__("threading").Lock()
@@ -67,6 +68,11 @@ class CacheManager:
             with self._lock:
                 self.scanned_dirs = set(cast("list[str]", scanned_dirs))
 
+            # 加载 unscanned_dirs
+            unscanned_dirs: list[Any] = cast("list[Any]", data.get("unscanned_dirs", []))
+            with self._lock:
+                self.unscanned_dirs = set(cast("list[str]", unscanned_dirs))
+
             with self._lock:
                 self.scan_complete = bool(data.get("scan_complete", False))
 
@@ -89,6 +95,7 @@ class CacheManager:
                     "tree_data": {k: v.to_dict() for k, v in self.tree_data.items()},
                     "checked_items": list(self.checked_items),
                     "scanned_dirs": list(self.scanned_dirs),
+                    "unscanned_dirs": list(self.unscanned_dirs),
                     "scan_complete": self.scan_complete,
                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                 }
@@ -109,6 +116,7 @@ class CacheManager:
             self.tree_data.clear()
             self.checked_items.clear()
             self.scanned_dirs.clear()
+            self.unscanned_dirs.clear()
             self.scan_complete = False
             self.url = ""
             self._file_count = 0
@@ -156,11 +164,13 @@ class CacheManager:
         """标记目录为已完全扫描（线程安全）"""
         with self._lock:
             self.scanned_dirs.add(dir_path)
+            self.unscanned_dirs.discard(dir_path)
 
     def mark_dir_unscanned(self, dir_path: str) -> None:
-        """移除目录的已扫描标记，允许重新扫描（线程安全）"""
+        """标记目录为未完全扫描（线程安全）"""
         with self._lock:
             self.scanned_dirs.discard(dir_path)
+            self.unscanned_dirs.add(dir_path)
 
     def is_dir_scanned(self, dir_path: str) -> bool:
         """目录是否已完全扫描"""
@@ -171,6 +181,11 @@ class CacheManager:
         """获取已扫描目录集合快照（用于续扫时传给 ScanService）"""
         with self._lock:
             return set(self.scanned_dirs)
+
+    def get_unscanned_dirs(self) -> set[str]:
+        """获取未完全扫描目录集合快照"""
+        with self._lock:
+            return set(self.unscanned_dirs)
 
     def has_item(self, item_id: str) -> bool:
         """是否已存在该 item（用于续扫时去重计数）"""
@@ -290,4 +305,5 @@ class CacheManager:
                 "total_files": self._file_count,
                 "total_dirs": self._dir_count,
                 "checked_count": len(self.checked_items),
+                "unscanned_count": len(self.unscanned_dirs),
             }

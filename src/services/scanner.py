@@ -319,6 +319,7 @@ class ScanService:
         from collections import deque
 
         all_items: list[DownloadItem] = []
+        _discovered_dirs: set[str] = set()
         queue: deque[tuple[str, str, int]] = deque()
         queue.append((dir_path, parent_id, depth))
 
@@ -346,6 +347,8 @@ class ScanService:
 
                 if self.on_log and (dirs or files):
                     self.on_log(f"  ├─ 子目录: {len(dirs)} 个, 文件: {len(files)} 个", "info")
+
+                _discovered_dirs.add(dir_path)
 
                 for full_path, name in dirs:
                     if self.is_cancelled():
@@ -388,10 +391,12 @@ class ScanService:
 
                     time.sleep(0.02)
 
-                if not self.is_cancelled():
-                    self._scanned_dirs.add(dir_path)
-                    if self.on_dir_scanned:
-                        self.on_dir_scanned(dir_path)
+        # 遍历完成后才批量标记（确保所有层级都已处理）
+        if not self.is_cancelled():
+            for d in _discovered_dirs:
+                self._scanned_dirs.add(d)
+                if self.on_dir_scanned:
+                    self.on_dir_scanned(d)
 
         return all_items
 
@@ -536,6 +541,7 @@ class ScanService:
 
         all_items: list[DownloadItem] = []
         items_lock = threading.Lock()
+        _discovered_dirs: set[str] = set()
         queue: deque[tuple[str, str, int]] = deque()
         queue.append((dir_path, parent_id, depth))
 
@@ -610,12 +616,9 @@ class ScanService:
                                 self.on_item_found(item)
                             queue.append((full_path, full_path, d + 1))
 
-                        # 标记目录已扫描
-                        if not self.is_cancelled():
-                            with self._scanned_dirs_lock:
-                                self._scanned_dirs.add(path)
-                            if self.on_dir_scanned:
-                                self.on_dir_scanned(path)
+                        # 记录已发现的目录（不标记，等遍历完成后批量标记）
+                        with items_lock:
+                            _discovered_dirs.add(path)
 
                     except Exception as e:
                         logger.error("并行扫描目录失败: %s", e)
@@ -626,6 +629,15 @@ class ScanService:
                 if not self.is_cancelled() and root_dirs and not queue and self.on_log:
                     root_names = [p.split("/")[-1] for p in root_dirs]
                     self.on_log(f"✓ 一级目录扫描完成 ({len(root_names)} 个): " + ", ".join(root_names), "success")
+
+            # 遍历完成后才批量标记（确保所有层级都已处理）
+            if not self.is_cancelled():
+                with self._scanned_dirs_lock:
+                    for d in _discovered_dirs:
+                        self._scanned_dirs.add(d)
+                if self.on_dir_scanned:
+                    for d in _discovered_dirs:
+                        self.on_dir_scanned(d)
         finally:
             executor.shutdown(wait=False)
 

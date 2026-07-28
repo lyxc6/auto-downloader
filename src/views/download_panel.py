@@ -192,6 +192,10 @@ class DownloadPanel(QWidget):
         self.stop_scan_btn.setEnabled(is_scanning)
         self.url_input.setEnabled(not is_scanning)
 
+    def set_scan_button_mode(self, is_continue: bool):
+        """切换扫描按钮模式：False=扫描目录, True=继续扫描"""
+        self.scan_btn.setText("继续扫描" if is_continue else "扫描目录")
+
     def set_downloading(self, is_downloading: bool):
         """设置下载状态"""
         self.download_btn.setEnabled(not is_downloading)

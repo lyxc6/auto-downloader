@@ -80,6 +80,14 @@ class DownloadTreeWidget(TreeWidget):
         self._items[item_id] = tw
         return tw
 
+    def apply_scan_status(self, unscanned_dirs: set[str]) -> None:
+        """更新目录节点的扫描状态图标（📂=未完成, 📁=已完成）"""
+        for item_id, tw in self._items.items():
+            item = self._all_items.get(item_id)
+            if item and item.is_dir:
+                icon = "📂" if item_id in unscanned_dirs else "📁"
+                tw.setText(1, icon)
+
     def _on_item_expanded(self, tw):
         """展开时按需 populate 子节点"""
         if self._batch_expanding:
