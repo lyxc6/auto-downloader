@@ -9,7 +9,7 @@ from qfluentwidgets import (
     StrongBodyLabel, BodyLabel,
     FluentIcon as FIF,
     OptionsSettingCard,
-    SpinBox,
+    SpinBox, SwitchButton,
     SmoothScrollArea,
     Theme
 )
@@ -255,8 +255,7 @@ class SettingsPanel(QWidget):
             "启动时自动检查是否有新版本",
             self
         )
-        from qfluentwidgets import Switch
-        self.auto_check_switch = Switch(self.auto_check_card)
+        self.auto_check_switch = SwitchButton(self.auto_check_card)
         self.auto_check_switch.setChecked(self.config.auto_check_update)
         self.auto_check_card.hBoxLayout.addWidget(self.auto_check_switch, 0, Qt.AlignRight)
         self.auto_check_card.hBoxLayout.addSpacing(16)
