@@ -1,12 +1,13 @@
 """下载队列面板"""
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, 
-    QListWidgetItem, QStackedWidget
+    QTableWidgetItem
 )
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 
 from qfluentwidgets import (
-    CardWidget, ListWidget, 
+    CardWidget, TableWidget, 
     ProgressBar, PushButton,
     StrongBodyLabel, BodyLabel, CaptionLabel,
     FluentIcon as FIF,
@@ -16,69 +17,14 @@ from qfluentwidgets import (
 )
 
 
-class QueueItemWidget(QWidget):
-    """队列项组件"""
-    
-    def __init__(self, item_id: str, name: str, parent=None):
-        super().__init__(parent)
-        self.item_id = item_id
-        self._setup_ui(name)
-    
-    def _setup_ui(self, name: str):
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
-        
-        # 文件信息
-        info_layout = QVBoxLayout()
-        
-        self.name_label = BodyLabel(name)
-        self.status_label = CaptionLabel("等待中")
-        self.status_label.setStyleSheet("color: gray;")
-        
-        info_layout.addWidget(self.name_label)
-        info_layout.addWidget(self.status_label)
-        
-        layout.addLayout(info_layout, 1)
-        
-        # 进度条
-        self.progress_bar = ProgressBar(self)
-        self.progress_bar.setFixedWidth(200)
-        layout.addWidget(self.progress_bar)
-        
-        # 进度标签
-        self.progress_label = CaptionLabel("0%")
-        self.progress_label.setFixedWidth(50)
-        self.progress_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-        layout.addWidget(self.progress_label)
-    
-    def update_progress(self, downloaded: int, total: int):
-        """更新进度"""
-        if total > 0:
-            percent = int(downloaded / total * 100)
-            self.progress_bar.setValue(percent)
-            self.progress_label.setText(f"{percent}%")
-    
-    def set_status(self, status: str):
-        """设置状态"""
-        status_map = {
-            "pending":     ("等待中", FluentSystemColor.CRITICAL_BACKGROUND),
-            "downloading": ("下载中", FluentSystemColor.CRITICAL_FOREGROUND),
-            "completed":   ("已完成", FluentSystemColor.SUCCESS_FOREGROUND),
-            "failed":      ("失败",   FluentSystemColor.CRITICAL_FOREGROUND),
-            "skipped":     ("已跳过", FluentSystemColor.CAUTION_FOREGROUND),
-        }
-        text, color_enum = status_map.get(status, ("未知", FluentSystemColor.CRITICAL_BACKGROUND))
-        self.status_label.setText(text)
-        self.status_label.setStyleSheet(f"color: {color_enum.color().name()};")
-
-
 class QueuePanel(QWidget):
     """下载队列面板"""
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("queuePanel")
-        self._items = {}  # item_id -> QueueItemWidget
+        self._items = {}  # item_id -> {"row": int, "status_item": QTableWidgetItem, "progress_bar": ProgressBar, "pct_item": QTableWidgetItem}
+        self._stats = {"pending": 0, "completed": 0, "failed": 0, "skipped": 0, "downloading": 0}
         self._setup_ui()
         qconfig.themeChanged.connect(self._on_theme_changed)
     
@@ -119,9 +65,18 @@ class QueuePanel(QWidget):
         
         layout.addWidget(stats_card)
         
-        # 队列列表
-        self.list_widget = ListWidget(self)
-        layout.addWidget(self.list_widget)
+        # 队列表格
+        self.table_widget = TableWidget(self)
+        self.table_widget.setColumnCount(4)
+        self.table_widget.setHorizontalHeaderLabels(["名称", "状态", "进度", ""])
+        self.table_widget.setColumnWidth(0, 400)
+        self.table_widget.setColumnWidth(1, 80)
+        self.table_widget.setColumnWidth(2, 200)
+        self.table_widget.setColumnWidth(3, 50)
+        self.table_widget.verticalHeader().setVisible(False)
+        self.table_widget.setEditTriggers(TableWidget.NoEditTriggers)
+        self.table_widget.setSelectionBehavior(TableWidget.SelectRows)
+        layout.addWidget(self.table_widget)
         
         # 连接信号
         self.clear_btn.clicked.connect(self.clear)
@@ -131,60 +86,107 @@ class QueuePanel(QWidget):
         if item_id in self._items:
             return
         
-        widget = QueueItemWidget(item_id, name, self)
-        self._items[item_id] = widget
+        row = self.table_widget.rowCount()
+        self.table_widget.insertRow(row)
         
-        item = QListWidgetItem(self.list_widget)
-        item.setSizeHint(widget.sizeHint())
-        self.list_widget.addItem(item)
-        self.list_widget.setItemWidget(item, widget)
+        # 名称列
+        name_item = QTableWidgetItem(name)
+        self.table_widget.setItem(row, 0, name_item)
         
-        self._update_stats()
+        # 状态列
+        status_item = QTableWidgetItem("等待中")
+        status_item.setForeground(QColor("gray"))
+        self.table_widget.setItem(row, 1, status_item)
+        
+        # 进度条列
+        progress_bar = ProgressBar(self.table_widget)
+        progress_bar.setFixedWidth(200)
+        self.table_widget.setCellWidget(row, 2, progress_bar)
+        
+        # 进度百分比列
+        pct_item = QTableWidgetItem("0%")
+        pct_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.table_widget.setItem(row, 3, pct_item)
+        
+        # 存储映射
+        self._items[item_id] = {
+            "row": row,
+            "status_item": status_item,
+            "progress_bar": progress_bar,
+            "pct_item": pct_item,
+            "status": "pending",
+        }
+        
+        self._stats["pending"] += 1
+        self._update_stats_labels()
     
     def update_progress(self, item_id: str, downloaded: int, total: int):
         """更新进度"""
-        if item_id in self._items:
-            self._items[item_id].update_progress(downloaded, total)
+        if item_id not in self._items:
+            return
+        info = self._items[item_id]
+        if total > 0:
+            percent = int(downloaded / total * 100)
+            info["progress_bar"].setValue(percent)
+            info["pct_item"].setText(f"{percent}%")
     
     def update_status(self, item_id: str, status: str):
         """更新状态"""
-        if item_id in self._items:
-            self._items[item_id].set_status(status)
-            self._update_stats()
+        if item_id not in self._items:
+            return
+        info = self._items[item_id]
+        
+        # 更新旧状态计数
+        old_status = info.get("status")
+        if old_status and old_status in self._stats:
+            self._stats[old_status] -= 1
+        
+        # 设置新状态
+        status_map = {
+            "pending":     ("等待中", FluentSystemColor.CRITICAL_BACKGROUND),
+            "downloading": ("下载中", FluentSystemColor.CRITICAL_FOREGROUND),
+            "completed":   ("已完成", FluentSystemColor.SUCCESS_FOREGROUND),
+            "failed":      ("失败",   FluentSystemColor.CRITICAL_FOREGROUND),
+            "skipped":     ("已跳过", FluentSystemColor.CAUTION_FOREGROUND),
+        }
+        text, color_enum = status_map.get(status, ("未知", FluentSystemColor.CRITICAL_BACKGROUND))
+        info["status_item"].setText(text)
+        info["status_item"].setForeground(QColor(color_enum.color().name()))
+        info["status"] = status
+        
+        # 更新新状态计数
+        if status in self._stats:
+            self._stats[status] += 1
+        
+        self._update_stats_labels()
     
     def clear(self):
         """清空列表"""
-        self.list_widget.clear()
+        self.table_widget.setRowCount(0)
         self._items.clear()
-        self._update_stats()
+        self._stats = {"pending": 0, "completed": 0, "failed": 0, "skipped": 0, "downloading": 0}
+        self._update_stats_labels()
     
-    def _update_stats(self):
-        """更新统计"""
+    def _update_stats_labels(self):
+        """更新统计标签"""
         total = len(self._items)
-        completed = sum(1 for w in self._items.values() 
-                       if w.status_label.text() == "已完成")
-        failed = sum(1 for w in self._items.values() 
-                    if w.status_label.text() == "失败")
-        pending = sum(1 for w in self._items.values() 
-                     if w.status_label.text() == "等待中")
-        
         self.total_label.setText(f"总计: {total}")
-        self.completed_label.setText(f"已完成: {completed}")
-        self.failed_label.setText(f"失败: {failed}")
-        self.pending_label.setText(f"等待中: {pending}")
+        self.completed_label.setText(f"已完成: {self._stats.get('completed', 0)}")
+        self.failed_label.setText(f"失败: {self._stats.get('failed', 0)}")
+        self.pending_label.setText(f"等待中: {self._stats.get('pending', 0)}")
     
     def _on_theme_changed(self, _theme: Theme):
         """主题切换：刷新所有可见状态标签颜色"""
-        for widget in self._items.values():
-            current_text = widget.status_label.text()
-            # 反查当前状态以重新应用颜色
-            for status_key, (text, _) in {
-                "pending": ("等待中", None),
-                "downloading": ("下载中", None),
-                "completed": ("已完成", None),
-                "failed": ("失败", None),
-                "skipped": ("已跳过", None),
-            }.items():
-                if current_text == text:
-                    widget.set_status(status_key)
-                    break
+        status_map = {
+            "pending":     ("等待中", FluentSystemColor.CRITICAL_BACKGROUND),
+            "downloading": ("下载中", FluentSystemColor.CRITICAL_FOREGROUND),
+            "completed":   ("已完成", FluentSystemColor.SUCCESS_FOREGROUND),
+            "failed":      ("失败",   FluentSystemColor.CRITICAL_FOREGROUND),
+            "skipped":     ("已跳过", FluentSystemColor.CAUTION_FOREGROUND),
+        }
+        for info in self._items.values():
+            status = info.get("status")
+            if status and status in status_map:
+                text, color_enum = status_map[status]
+                info["status_item"].setText(text)
+                info["status_item"].setForeground(QColor(color_enum.color().name()))
