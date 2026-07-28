@@ -24,6 +24,7 @@ class DownloadTreeWidget(TreeWidget):
         self._checked_set: Set[str] = set()   # 勾选真值源（文件 item_id 集合）
         self._updating = False
         self._check_sync_cb: Optional[Callable[[Set[str]], None]] = None
+        self._batch_expanding = False
         self.setHeaderLabels(["名称", "类型", "大小"])
         self.setColumnWidth(0, 300)
         self.setColumnWidth(1, 80)
@@ -80,6 +81,8 @@ class DownloadTreeWidget(TreeWidget):
 
     def _on_item_expanded(self, tw):
         """展开时按需 populate 子节点"""
+        if self._batch_expanding:
+            return
         item_id = tw.data(0, Qt.ItemDataRole.UserRole)
         if item_id in self._loaded:
             return
@@ -256,8 +259,26 @@ class DownloadTreeWidget(TreeWidget):
             self._cascade_check_realized(child, checked)
 
     def expand_all_items(self):
-        """展开所有"""
-        self.expandAll()
+        """批量展开所有已加载节点（不触发新的加载）"""
+        self._batch_expanding = True
+        self.blockSignals(True)
+        self.setUpdatesEnabled(False)
+        try:
+            self._expand_loaded_recursive(self.invisibleRootItem())
+        finally:
+            self._batch_expanding = False
+            self.blockSignals(False)
+            self.setUpdatesEnabled(True)
+            self.doItemsLayout()
+
+    def _expand_loaded_recursive(self, tw_item):
+        """递归展开已加载的节点（未加载的保持折叠）"""
+        for i in range(tw_item.childCount()):
+            child = tw_item.child(i)
+            item_id = child.data(0, Qt.ItemDataRole.UserRole)
+            if item_id in self._loaded:
+                child.setExpanded(True)
+                self._expand_loaded_recursive(child)
 
     def collapse_all_items(self):
         """收起所有"""
