@@ -11,5 +11,8 @@
   "language": "zh_CN",
   "window_width": 900,
   "window_height": 600,
+  "update_channel": "stable",
+  "auto_check_update": true,
+  "last_update_check_time": "",
   "last_url": "https://www.flyingfry.cc/index.php/224.html"
 }
