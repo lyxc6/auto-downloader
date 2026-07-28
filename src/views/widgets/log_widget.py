@@ -1,6 +1,6 @@
 """日志组件"""
 
-from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
+from PySide6.QtGui import QColor, QFont, QTextCharFormat
 from qfluentwidgets import PlainTextEdit, Theme, isDarkTheme, qconfig
 
 MAX_LOG_LINES = 2000
@@ -45,11 +45,8 @@ class LogWidget(PlainTextEdit):
             fmt.setFontWeight(QFont.Weight.Bold)
         else:
             fmt.setFontWeight(QFont.Weight.Normal)
-        cursor = self.textCursor()
-        cursor.mergeCharFormat(fmt)
+        self.setCurrentCharFormat(fmt)
         self.appendPlainText(message)
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        self.setTextCursor(cursor)
         self.ensureCursorVisible()
 
     def add_message(self, message: str, level: str = "info"):
