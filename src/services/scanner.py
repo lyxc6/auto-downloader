@@ -620,6 +620,16 @@ class ScanService:
                         with items_lock:
                             _discovered_dirs.add(path)
 
+                        # 输出当前目录的扫描日志
+                        display_path = path or "/"
+                        if self.on_log:
+                            if len(dirs) > 0 or len(files) > 0:
+                                self.on_log(f"正在扫描: {display_path}", "info")
+                            else:
+                                self.on_log(f"正在扫描: {display_path}  (空目录)", "dim")
+                        if self.on_log and (dirs or files):
+                            self.on_log(f"  ├─ 子目录: {len(dirs)} 个, 文件: {len(files)} 个", "info")
+
                     except Exception as e:
                         logger.error("并行扫描目录失败: %s", e)
                     finally:
