@@ -3,6 +3,7 @@ from PySide6.QtGui import QFont, QColor, QTextCursor, QTextCharFormat
 
 from qfluentwidgets import PlainTextEdit, isDarkTheme, qconfig, Theme
 
+MAX_LOG_LINES = 2000
 
 # 浅色 / 深色文字配色
 _LIGHT = {
@@ -45,13 +46,21 @@ class LogWidget(PlainTextEdit):
 
     def add_message(self, message: str, level: str = "info"):
         self._messages.append((message, level))
-        self._render_message(message, level)
+        if len(self._messages) > MAX_LOG_LINES:
+            self._messages = self._messages[-MAX_LOG_LINES:]
+            self.clear()
+            self._render_all()
+        else:
+            self._render_message(message, level)
 
     def _on_theme_changed(self, _theme: Theme):
         self.clear()
+        self._render_all()
+
+    def _render_all(self):
+        """渲染全部消息"""
         for msg, lvl in self._messages:
             self._render_message(msg, lvl)
 
     def clear(self):
-        self._messages.clear()
         super().clear()
