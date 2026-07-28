@@ -1,8 +1,8 @@
 """日志配置模块"""
-import logging
-import sys
-import os
 
+import logging
+import os
+import sys
 
 _log_setup_done = False
 
@@ -33,9 +33,7 @@ def setup_logging(log_dir: str = "", level: int = logging.DEBUG) -> logging.Logg
         if getattr(sys, "frozen", False):
             log_dir = os.path.dirname(sys.executable)
         else:
-            log_dir = os.path.dirname(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            )
+            log_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
     log_path = os.path.join(log_dir, "app.log")
     try:

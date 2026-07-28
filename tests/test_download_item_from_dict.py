@@ -1,4 +1,5 @@
 """DownloadItem.from_dict 不变性回归测试 (#13)"""
+
 from src.models.download_item import DownloadItem, DownloadStatus, ItemType
 
 

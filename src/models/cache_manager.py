@@ -1,9 +1,11 @@
 """缓存管理器"""
+
 import json
 import logging
 import os
 import time
-from typing import Any, Dict, List, Set, Optional, cast
+from typing import Any, cast
+
 from .download_item import DownloadItem
 
 logger = logging.getLogger(__name__)
@@ -11,38 +13,38 @@ logger = logging.getLogger(__name__)
 
 class CacheManager:
     """缓存管理器"""
-    
+
     def __init__(self, cache_file: str):
         self.cache_file = cache_file
-        self.tree_data: Dict[str, DownloadItem] = {}
-        self.checked_items: Set[str] = set()
-        self.scanned_dirs: Set[str] = set()
+        self.tree_data: dict[str, DownloadItem] = {}
+        self.checked_items: set[str] = set()
+        self.scanned_dirs: set[str] = set()
         self.scan_complete: bool = False
         self.url: str = ""
-        self._lock = __import__('threading').Lock()
+        self._lock = __import__("threading").Lock()
         # 增量计数器（避免 get_stats 遍历 tree_data）
         self._file_count = 0
         self._dir_count = 0
-    
+
     def load(self) -> bool:
         """加载缓存"""
         try:
             if not os.path.exists(self.cache_file):
                 return False
-            
-            with open(self.cache_file, 'r', encoding='utf-8') as f:
+
+            with open(self.cache_file, encoding="utf-8") as f:
                 data: dict[str, Any] = json.load(f)
-            
+
             # 加载tree_data
-            tree_data: dict[str, Any] = cast(dict[str, Any], data.get("tree_data", {}))
-            
+            tree_data: dict[str, Any] = cast("dict[str, Any]", data.get("tree_data", {}))
+
             with self._lock:
                 self.tree_data.clear()
                 self._file_count = 0
                 self._dir_count = 0
                 for item_id, item_dict in tree_data.items():
                     try:
-                        item = DownloadItem.from_dict(cast(dict[str, Any], item_dict))
+                        item = DownloadItem.from_dict(cast("dict[str, Any]", item_dict))
                         self.tree_data[str(item_id)] = item
                         if item.is_file:
                             self._file_count += 1
@@ -50,30 +52,30 @@ class CacheManager:
                             self._dir_count += 1
                     except Exception as e:
                         logger.warning("解析缓存项 %s 失败: %s", str(item_id), e)
-            
+
             # 加载URL
             with self._lock:
-                self.url = str(cast(str, data.get("url", "")))
-            
+                self.url = str(cast("str", data.get("url", "")))
+
             # 加载checked_items
-            checked_items: list[Any] = cast(list[Any], data.get("checked_items", []))
+            checked_items: list[Any] = cast("list[Any]", data.get("checked_items", []))
             with self._lock:
-                self.checked_items = set(cast(list[str], checked_items))
-            
+                self.checked_items = set(cast("list[str]", checked_items))
+
             # 加载 scanned_dirs 和 scan_complete
-            scanned_dirs: list[Any] = cast(list[Any], data.get("scanned_dirs", []))
+            scanned_dirs: list[Any] = cast("list[Any]", data.get("scanned_dirs", []))
             with self._lock:
-                self.scanned_dirs = set(cast(list[str], scanned_dirs))
-            
+                self.scanned_dirs = set(cast("list[str]", scanned_dirs))
+
             with self._lock:
                 self.scan_complete = bool(data.get("scan_complete", False))
-            
+
             return True
-            
+
         except Exception:
             logger.error("加载缓存失败", exc_info=True)
             return False
-    
+
     def save(self, url: str = ""):
         """保存缓存"""
         try:
@@ -88,19 +90,19 @@ class CacheManager:
                     "checked_items": list(self.checked_items),
                     "scanned_dirs": list(self.scanned_dirs),
                     "scan_complete": self.scan_complete,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                 }
-            
+
             os.makedirs(os.path.dirname(self.cache_file), exist_ok=True)
-            with open(self.cache_file, 'w', encoding='utf-8') as f:
+            with open(self.cache_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-            
+
             return True
-            
+
         except Exception:
             logger.error("保存缓存失败", exc_info=True)
             return False
-    
+
     def clear(self):
         """清空缓存"""
         with self._lock:
@@ -111,7 +113,7 @@ class CacheManager:
             self.url = ""
             self._file_count = 0
             self._dir_count = 0
-    
+
     def clear_tree_data_only(self):
         """仅清空 tree_data 和 scan_complete，保留 checked_items、scanned_dirs、url（用于刷新场景）"""
         with self._lock:
@@ -120,21 +122,21 @@ class CacheManager:
             self._file_count = 0
             self._dir_count = 0
 
-    def save_scanned_dirs_backup(self) -> Set[str]:
+    def save_scanned_dirs_backup(self) -> set[str]:
         """返回 scanned_dirs 快照（刷新前备份用）"""
         with self._lock:
             return set(self.scanned_dirs)
 
-    def restore_scanned_dirs(self, backup: Set[str]) -> None:
+    def restore_scanned_dirs(self, backup: set[str]) -> None:
         """恢复 scanned_dirs（刷新失败时用）"""
         with self._lock:
             self.scanned_dirs = set(backup)
-    
+
     def cleanup_checked(self):
         """剔除 checked_items 中已不在 tree_data 里的失效 id"""
         with self._lock:
             self.checked_items &= set(self.tree_data.keys())
-    
+
     def has_data_for(self, url: str) -> bool:
         """是否已有指定URL的缓存数据"""
         with self._lock:
@@ -165,7 +167,7 @@ class CacheManager:
         with self._lock:
             return dir_path in self.scanned_dirs
 
-    def get_scanned_dirs(self) -> Set[str]:
+    def get_scanned_dirs(self) -> set[str]:
         """获取已扫描目录集合快照（用于续扫时传给 ScanService）"""
         with self._lock:
             return set(self.scanned_dirs)
@@ -175,7 +177,7 @@ class CacheManager:
         with self._lock:
             return item_id in self.tree_data
 
-    def set_checked_items(self, items: Set[str]) -> None:
+    def set_checked_items(self, items: set[str]) -> None:
         """整体替换勾选集合（线程安全）"""
         with self._lock:
             self.checked_items = set(items)
@@ -184,20 +186,17 @@ class CacheManager:
         """设置当前 URL（线程安全）"""
         with self._lock:
             self.url = url
-    
-    def get_all_items(self) -> List[DownloadItem]:
+
+    def get_all_items(self) -> list[DownloadItem]:
         """获取所有项目（用于恢复到目录树）"""
         with self._lock:
-            return sorted(
-                self.tree_data.values(),
-                key=lambda item: (item.full_path or "").count("/")
-            )
+            return sorted(self.tree_data.values(), key=lambda item: (item.full_path or "").count("/"))
 
-    def get_tree_data_snapshot(self) -> Dict[str, DownloadItem]:
+    def get_tree_data_snapshot(self) -> dict[str, DownloadItem]:
         """返回 tree_data 的浅拷贝 dict（item_id -> DownloadItem）"""
         with self._lock:
             return dict(self.tree_data)
-    
+
     def add_item(self, item: DownloadItem):
         """添加项目"""
         with self._lock:
@@ -220,7 +219,7 @@ class CacheManager:
             elif item.is_dir:
                 self._dir_count += 1
             return True
-    
+
     def remove_item(self, item_id: str):
         """移除项目"""
         with self._lock:
@@ -232,11 +231,12 @@ class CacheManager:
                     self._dir_count -= 1
             self.checked_items.discard(item_id)
 
-    def remove_directory_descendants(self, dir_item_id: str) -> Set[str]:
+    def remove_directory_descendants(self, dir_item_id: str) -> set[str]:
         """移除目录的所有后代（含子目录和文件），返回被移除的 item_id 集合。线程安全。"""
         with self._lock:
             from collections import deque as _dq
-            to_remove: Set[str] = set()
+
+            to_remove: set[str] = set()
             queue = _dq()
             for cid, item in self.tree_data.items():
                 if item.parent_id == dir_item_id:
@@ -257,12 +257,12 @@ class CacheManager:
                 self.checked_items.discard(rid)
             self.scanned_dirs.discard(dir_item_id)
             return to_remove
-    
-    def get_item(self, item_id: str) -> Optional[DownloadItem]:
+
+    def get_item(self, item_id: str) -> DownloadItem | None:
         """获取项目"""
         with self._lock:
             return self.tree_data.get(item_id)
-    
+
     def toggle_check(self, item_id: str) -> bool:
         """切换选中状态"""
         with self._lock:
@@ -272,25 +272,22 @@ class CacheManager:
             else:
                 self.checked_items.add(item_id)
                 return True
-    
+
     def is_checked(self, item_id: str) -> bool:
         """是否选中"""
         with self._lock:
             return item_id in self.checked_items
-    
-    def get_checked_files(self) -> List[DownloadItem]:
+
+    def get_checked_files(self) -> list[DownloadItem]:
         """获取所有选中的文件"""
         with self._lock:
-            return [
-                item for item_id, item in self.tree_data.items()
-                if item_id in self.checked_items and item.is_file
-            ]
-    
-    def get_stats(self) -> Dict[str, int]:
+            return [item for item_id, item in self.tree_data.items() if item_id in self.checked_items and item.is_file]
+
+    def get_stats(self) -> dict[str, int]:
         """获取统计信息（O(1)，使用增量计数器）"""
         with self._lock:
             return {
                 "total_files": self._file_count,
                 "total_dirs": self._dir_count,
-                "checked_count": len(self.checked_items)
+                "checked_count": len(self.checked_items),
             }

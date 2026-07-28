@@ -7,7 +7,9 @@
 - 刷新场景: _all_items 有项但 cache_manager.tree_data 为空时仍正确返回
   (不依赖 cache_manager.tree_data)
 """
+
 import os
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
@@ -25,20 +27,22 @@ def qapp():
 
 def _mk(item_id, parent_id, is_file):
     return DownloadItem(
-        item_id=item_id, name=item_id.split("/")[-1],
+        item_id=item_id,
+        name=item_id.split("/")[-1],
         url="http://x/" + item_id if is_file else "",
         item_type=ItemType.FILE if is_file else ItemType.DIR,
-        parent_id=parent_id, full_path=item_id,
+        parent_id=parent_id,
+        full_path=item_id,
     )
 
 
 def _sample_tree():
     """A/ (dir)
-       A/sub1/ (dir)
-       A/sub1/f1.txt (file)
-       A/sub2/ (dir)
-       A/sub2/f2.txt (file)
-       B/f3.txt (file)
+    A/sub1/ (dir)
+    A/sub1/f1.txt (file)
+    A/sub2/ (dir)
+    A/sub2/f2.txt (file)
+    B/f3.txt (file)
     """
     return {
         "A": _mk("A", "", False),

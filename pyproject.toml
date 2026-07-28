@@ -1,0 +1,43 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+    "SIM",  # flake8-simplify
+    "TCH",  # flake8-type-checking
+    "RUF",  # ruff-specific
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "B008",   # function call in default argument (PySide6 pattern)
+    "SIM105", # use contextlib.suppress (readability preference)
+    "RUF001", # ambiguous unicode in strings (Chinese fullwidth chars are normal here)
+    "RUF002", # ambiguous unicode in docstrings (Chinese fullwidth chars are normal here)
+    "RUF003", # ambiguous unicode in comments (Chinese fullwidth chars are normal here)
+    "TC003",  # move stdlib import to TYPE_CHECKING (not needed, used in runtime annotations)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "cr-lf"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 30
+addopts = "-v --tb=short"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "gui: marks tests that require a display server",
+]

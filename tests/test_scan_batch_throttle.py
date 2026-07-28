@@ -7,7 +7,9 @@
 - 扫描结束 flush 剩余 buffer
 - scan_progress 节流到批量 cadence（不再 per-item）
 """
+
 import os
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
@@ -61,8 +63,12 @@ class FakeService:
 
 def _fake_item(i):
     return DownloadItem(
-        item_id=f"f{i}", name=f"f{i}", url=f"http://x/f{i}",
-        item_type=ItemType.FILE, full_path=f"f{i}", size=10,
+        item_id=f"f{i}",
+        name=f"f{i}",
+        url=f"http://x/f{i}",
+        item_type=ItemType.FILE,
+        full_path=f"f{i}",
+        size=10,
     )
 
 
@@ -70,14 +76,18 @@ def _fake_item(i):
 def make_controller(monkeypatch):
     def _make(script, clock):
         config = type("C", (), {"max_depth": 5})()
-        cache = type("C", (), {
-            "add_item": lambda self, item: None,
-            "has_item": lambda self, item_id: False,
-            "try_add_item": lambda self, item: True,
-            "save": lambda self, url="": True,
-            "mark_dir_scanned": lambda self, dp: None,
-            "set_scan_complete": lambda self, complete: None,
-        })()
+        cache = type(
+            "C",
+            (),
+            {
+                "add_item": lambda self, item: None,
+                "has_item": lambda self, item_id: False,
+                "try_add_item": lambda self, item: True,
+                "save": lambda self, url="": True,
+                "mark_dir_scanned": lambda self, dp: None,
+                "set_scan_complete": lambda self, complete: None,
+            },
+        )()
         ctrl = ScanController(config, cache)
 
         monkeypatch.setattr(scan_module, "monotonic", clock.monotonic)
@@ -105,9 +115,7 @@ def test_batch_emits_at_50(make_controller):
     script = [("item", _fake_item(i)) for i in range(50)]
     ctrl = make_controller(script, clock)
     items_found = []
-    ctrl.items_found.connect(
-        lambda items: items_found.append(items), Qt.DirectConnection
-    )
+    ctrl.items_found.connect(lambda items: items_found.append(items), Qt.DirectConnection)
     _run_and_join(ctrl)
     assert len(items_found) == 1
     assert len(items_found[0]) == 50
@@ -120,9 +128,7 @@ def test_batch_emits_at_100ms(make_controller):
     script.append(("item", _fake_item(10)))
     ctrl = make_controller(script, clock)
     items_found = []
-    ctrl.items_found.connect(
-        lambda items: items_found.append(items), Qt.DirectConnection
-    )
+    ctrl.items_found.connect(lambda items: items_found.append(items), Qt.DirectConnection)
     _run_and_join(ctrl)
     assert len(items_found) == 1
     assert len(items_found[0]) == 11
@@ -133,9 +139,7 @@ def test_flush_remaining_on_complete(make_controller):
     script = [("item", _fake_item(i)) for i in range(30)]
     ctrl = make_controller(script, clock)
     items_found = []
-    ctrl.items_found.connect(
-        lambda items: items_found.append(items), Qt.DirectConnection
-    )
+    ctrl.items_found.connect(lambda items: items_found.append(items), Qt.DirectConnection)
     _run_and_join(ctrl)
     assert len(items_found) == 1
     assert len(items_found[0]) == 30
@@ -146,8 +150,6 @@ def test_progress_throttled_to_batch(make_controller):
     script = [("item", _fake_item(i)) for i in range(50)]
     ctrl = make_controller(script, clock)
     progress = []
-    ctrl.scan_progress.connect(
-        lambda f, d: progress.append((f, d)), Qt.DirectConnection
-    )
+    ctrl.scan_progress.connect(lambda f, d: progress.append((f, d)), Qt.DirectConnection)
     _run_and_join(ctrl)
     assert len(progress) == 1

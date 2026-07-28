@@ -6,6 +6,7 @@
 - 调用后 download_panel.update_stats 被调用且 checked 参数正确
 - 多次勾选/取消均触发更新
 """
+
 from unittest.mock import MagicMock
 
 from src.app import Application
@@ -14,9 +15,7 @@ from src.app import Application
 def _make_app():
     obj = Application.__new__(Application)
     obj.cache_manager = MagicMock()
-    obj.cache_manager.get_stats.return_value = {
-        "total_files": 10, "total_dirs": 3, "checked_count": 2
-    }
+    obj.cache_manager.get_stats.return_value = {"total_files": 10, "total_dirs": 3, "checked_count": 2}
     obj.window = MagicMock()
     return obj
 
@@ -39,9 +38,7 @@ def test_on_checked_changed_updates_stats():
 def test_on_checked_changed_empty_set():
     """取消全部勾选也应触发更新（checked=0）"""
     app = _make_app()
-    app.cache_manager.get_stats.return_value = {
-        "total_files": 10, "total_dirs": 3, "checked_count": 0
-    }
+    app.cache_manager.get_stats.return_value = {"total_files": 10, "total_dirs": 3, "checked_count": 0}
     app._on_checked_changed(set())
     app.cache_manager.set_checked_items.assert_called_once_with(set())
     args = app.window.downloadPanel.update_stats.call_args.args
@@ -64,4 +61,4 @@ def test_on_checked_changed_preserves_total_files_dirs():
     app._on_checked_changed({"a.txt"})
     args = app.window.downloadPanel.update_stats.call_args.args
     assert args[0] == 10  # total_files
-    assert args[1] == 3   # total_dirs
+    assert args[1] == 3  # total_dirs

@@ -1,119 +1,119 @@
 """应用主类"""
+
 import logging
-import sys
 import signal
+import sys
 import threading
-from typing import Any, Optional
-from PySide6.QtWidgets import QApplication
+from typing import Any
+
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import QApplication
 from qfluentwidgets import InfoBar, InfoBarPosition
 
-from .utils.logger import setup_logging
-from .models import AppConfig, CacheManager, DownloadItem
-from .controllers import DownloadController, ScanController
-from .services import UpdateChecker
-from .views import MainWindow
 from . import __version__
+from .controllers import DownloadController, ScanController
+from .models import AppConfig, CacheManager, DownloadItem
+from .services import UpdateChecker
+from .utils.logger import setup_logging
+from .views import MainWindow
 
 logger = logging.getLogger(__name__)
 
 
 class Application:
     """应用主类"""
-    
+
     def __init__(self):
         # 初始化日志
         setup_logging()
         logger.info("应用启动")
-        
+
         # 设置高DPI支持
-        QApplication.setHighDpiScaleFactorRoundingPolicy(
-            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
-        )
-        
+        QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+
         # 创建QApplication
         self.app = QApplication(sys.argv)
         self.app.setApplicationName("网站文件自动下载器")
         self.app.setApplicationVersion(__version__)
-        
+
         # 加载配置
         self.config = AppConfig.load()
-        
+
         # 创建缓存管理器
         self.cache_manager = CacheManager(self.config.cache_file)
         self.cache_manager.load()
-        
+
         # 创建控制器
         self.download_controller = DownloadController(self.config)
         self.scan_controller = ScanController(self.config, self.cache_manager)
-        
+
         # 创建更新检查器
         self.update_checker = UpdateChecker()
-        
+
         # 创建主窗口
         self.window = MainWindow(self.config)
-        
+
         # 连接信号
         self._connect_signals()
-        
+
         # SIGINT 安全化：信号处理器只置位事件，由主线程定时器轮询处理
         self._shutdown_event = threading.Event()
         self._shutdown_done = False
-        self._shutdown_timer: Optional[QTimer] = None
+        self._shutdown_timer: QTimer | None = None
         signal.signal(signal.SIGINT, self._signal_handler)
         self._start_shutdown_poller()
-        
+
         self._auto_save_timer = QTimer(self.window)
         self._auto_save_timer.setInterval(30000)
         self._auto_save_timer.timeout.connect(self.cache_manager.save)
-    
+
     def _connect_signals(self):
         """连接信号"""
         # 下载面板信号
         download_panel = self.window.downloadPanel
-        
+
         # 扫描信号：视图层 → 控制器
         download_panel.scan_requested.connect(self._on_scan_requested)
         download_panel.refresh_requested.connect(self._on_refresh_requested)
         download_panel.refresh_directory_requested.connect(self._on_directory_refresh_requested)
         download_panel.stop_scan_btn.clicked.connect(self.scan_controller.cancel_scan)
-        
+
         # 下载信号：视图层 → 控制器
         download_panel.download_requested.connect(self._on_download_requested)
         download_panel.stop_download_btn.clicked.connect(self.download_controller.cancel_download)
-        
+
         # 控制器信号 → 视图层
         self.scan_controller.items_found.connect(download_panel.add_items_batch)
         self.scan_controller.log_message.connect(download_panel.add_log)
         self.scan_controller.scan_progress.connect(self._on_scan_progress)
         self.scan_controller.scan_completed.connect(self._on_scan_completed)
         self.scan_controller.scan_error.connect(self._on_scan_error)
-        
+
         # 缓存/刷新相关信号
         self.scan_controller.cache_load_completed.connect(self._on_cache_load_completed)
         self.scan_controller.refresh_cleanup.connect(self._on_refresh_cleanup)
-        
+
         self.download_controller.log_message.connect(download_panel.add_log)
         self.download_controller.progress_updated.connect(self._on_download_progress)
         self.download_controller.status_changed.connect(self._on_download_status)
         self.download_controller.batch_completed.connect(self._on_download_completed)
         self.download_controller.download_validated.connect(self._on_download_validated)
-        
+
         # 设置面板信号
         self.window.settingsPanel.theme_changed.connect(self.window.apply_theme)
         self.window.settingsPanel.config_changed.connect(self._on_config_changed)
         self.window.settingsPanel.check_update_requested.connect(self._on_check_update_requested)
         self.window.closing.connect(self._on_app_closing)
-        
+
         # 更新检查器信号
         self.update_checker.check_finished.connect(self._on_update_check_finished)
         self.update_checker.check_error.connect(self._on_update_check_error)
-        
+
         self.window.downloadPanel.tree_widget.set_check_sync_callback(self._on_checked_changed)
-    
+
     def _start_auto_save(self):
         self._auto_save_timer.start()
-    
+
     def _stop_auto_save_if_idle(self):
         if not self.scan_controller.is_scanning and not self.download_controller.is_downloading:
             self._auto_save_timer.stop()
@@ -122,42 +122,38 @@ class Application:
         """勾选状态变化：同步到缓存并实时更新已选统计"""
         self.cache_manager.set_checked_items(checked_ids)
         stats = self.cache_manager.get_stats()
-        self.window.downloadPanel.update_stats(
-            stats['total_files'], stats['total_dirs'], stats['checked_count']
-        )
-    
+        self.window.downloadPanel.update_stats(stats["total_files"], stats["total_dirs"], stats["checked_count"])
+
     # ==================== 扫描相关回调 ====================
-    
+
     def _on_scan_requested(self, url: str):
         """扫描请求处理"""
         self.config.last_url = url
         self.config.save()
-        
+
         self.window.downloadPanel.log_widget.clear()
         self.window.downloadPanel.set_scanning(True)
         self.window.downloadPanel.download_btn.setEnabled(False)
         self._start_auto_save()
-        
+
         # 默认启用并行扫描（scan_max_workers > 1 时）
         parallel = self.config.scan_max_workers > 1
-        self.scan_controller.start_scan_with_cache(
-            url, self.config.scan_mode, parallel=parallel
-        )
-    
+        self.scan_controller.start_scan_with_cache(url, self.config.scan_mode, parallel=parallel)
+
     def _on_refresh_requested(self, url: str):
         """刷新请求处理"""
         self.config.last_url = url
         self.config.save()
-        
+
         self.window.downloadPanel.log_widget.clear()
         self.window.downloadPanel.set_scanning(True)
         self.window.downloadPanel.download_btn.setEnabled(False)
         self._start_auto_save()
-        
+
         # 默认启用并行扫描
         parallel = self.config.scan_max_workers > 1
         self.scan_controller.start_refresh(url, self.config.scan_mode, parallel=parallel)
-    
+
     def _on_directory_refresh_requested(self, item_id: str):
         """目录刷新请求处理"""
         item = self.cache_manager.get_item(item_id)
@@ -167,10 +163,7 @@ class Application:
         base_url = self.cache_manager.url
         if not base_url:
             InfoBar.error(
-                title="错误",
-                content="无有效URL，请先执行一次扫描",
-                parent=self.window,
-                position=InfoBarPosition.TOP
+                title="错误", content="无有效URL，请先执行一次扫描", parent=self.window, position=InfoBarPosition.TOP
             )
             return
 
@@ -181,30 +174,24 @@ class Application:
 
         # 更新统计
         stats = self.cache_manager.get_stats()
-        self.window.downloadPanel.update_stats(
-            stats['total_files'], stats['total_dirs'], stats['checked_count']
-        )
+        self.window.downloadPanel.update_stats(stats["total_files"], stats["total_dirs"], stats["checked_count"])
 
         self.window.downloadPanel.set_scanning(True)
         self.window.downloadPanel.download_btn.setEnabled(False)
         self._start_auto_save()
-        
-        self.scan_controller.start_directory_refresh(
-            base_url, item_id, item.full_path, item.parent_id
-        )
-    
+
+        self.scan_controller.start_directory_refresh(base_url, item_id, item.full_path, item.parent_id)
+
     def _on_cache_load_completed(self, tree_data: dict, checked_items: set):
         """缓存加载完成：更新视图层"""
         self.window.downloadPanel.clear_tree()
         self.window.downloadPanel.tree_widget.load_from_items(tree_data)
         self.window.downloadPanel.tree_widget.apply_checked_items(checked_items)
-        
+
         stats = self.cache_manager.get_stats()
-        self.window.downloadPanel.update_stats(
-            stats['total_files'], stats['total_dirs'], stats['checked_count']
-        )
-        self.window.downloadPanel.download_btn.setEnabled(stats['total_files'] > 0)
-    
+        self.window.downloadPanel.update_stats(stats["total_files"], stats["total_dirs"], stats["checked_count"])
+        self.window.downloadPanel.download_btn.setEnabled(stats["total_files"] > 0)
+
     def _on_refresh_cleanup(self, to_remove: set):
         """刷新清理：移除僵尸节点"""
         tw = self.window.downloadPanel.tree_widget
@@ -212,58 +199,51 @@ class Application:
         for item_id in sorted(to_remove, key=lambda i: i.count("/"), reverse=True):
             tw.remove_item(item_id)
         tw.recompute_parent_states()
-    
+
     def _on_scan_progress(self, files: int, dirs: int):
         """扫描进度更新"""
         self.window.downloadPanel.update_stats(files, dirs, len(self.cache_manager.checked_items))
-    
+
     def _on_scan_completed(self, file_count: int, dir_count: int):
         """扫描完成"""
         self.window.downloadPanel.set_scanning(False)
         self.window.downloadPanel.download_btn.setEnabled(file_count > 0)
-        
+
         # 更新统计
         stats = self.cache_manager.get_stats()
-        self.window.downloadPanel.update_stats(
-            stats['total_files'],
-            stats['total_dirs'],
-            stats['checked_count']
-        )
-        
+        self.window.downloadPanel.update_stats(stats["total_files"], stats["total_dirs"], stats["checked_count"])
+
         self._stop_auto_save_if_idle()
-    
+
     def _on_scan_error(self, error_msg: str):
         """扫描失败"""
         self._stop_auto_save_if_idle()
-    
+
     # ==================== 下载相关回调 ====================
-    
+
     def _on_download_requested(self):
         """下载请求处理"""
         # 从目录树取勾选文件
         checked_files = self.window.downloadPanel.tree_widget.get_checked_files()
-        
+
         if not checked_files:
             InfoBar.warning(
-                title="警告",
-                content="请先选择要下载的文件",
-                parent=self.window,
-                position=InfoBarPosition.TOP
+                title="警告", content="请先选择要下载的文件", parent=self.window, position=InfoBarPosition.TOP
             )
             return
-        
+
         # 设置下载状态
         self.window.downloadPanel.set_downloading(True)
         self._start_auto_save()
-        
+
         # 调用控制器（带验证）
         self.download_controller.start_download_with_validation(checked_files)
-    
+
     def _on_download_validated(self, checked_files: list[DownloadItem]):
         """下载验证通过：添加到队列"""
         for item in checked_files:
             self.window.queuePanel.add_item(item.item_id, item.name)
-    
+
     def _on_download_progress(self, item_id: str, downloaded: int, total_size: int):
         """下载进度更新"""
         self.window.queuePanel.update_progress(item_id, downloaded, total_size)
@@ -271,24 +251,24 @@ class Application:
     def _on_download_status(self, item_id: str, status: str):
         """下载状态更新"""
         self.window.queuePanel.update_status(item_id, status)
-    
+
     def _on_download_completed(self, stats_dict: dict[str, Any]) -> None:
         """下载完成"""
         self.window.downloadPanel.set_downloading(False)
         self.cache_manager.save()
         logger.info("下载完成，缓存已保存")
         self._stop_auto_save_if_idle()
-    
+
     # ==================== 其他回调 ====================
-    
+
     def _on_check_update_requested(self, channel: str, version: str, last_check_time: str):
         """手动检查更新请求"""
         self.update_checker.check_update(channel, version, last_check_time)
-    
+
     def _on_update_check_finished(self, result: dict):
         """更新检查完成"""
         self.window.settingsPanel.on_check_update_finished()
-        
+
         if result.get("error"):
             InfoBar.warning(
                 title="检查更新",
@@ -298,16 +278,16 @@ class Application:
                 duration=3000,
             )
             return
-        
+
         if result.get("has_update"):
             version = result.get("version", "")
-            url = result.get("url", "")
+            _url = result.get("url", "")
             notes = result.get("notes", "")
-            
+
             content = f"发现新版本 v{version}"
             if notes:
                 content += f"\n{notes[:100]}..."
-            
+
             InfoBar.success(
                 title="发现新版本",
                 content=content,
@@ -315,7 +295,7 @@ class Application:
                 position=InfoBarPosition.TOP,
                 duration=5000,
             )
-            
+
             # 更新上次检查时间
             self.config.last_update_check_time = self.update_checker.get_current_check_time()
             self.config.save()
@@ -327,7 +307,7 @@ class Application:
                 position=InfoBarPosition.TOP,
                 duration=2000,
             )
-    
+
     def _on_update_check_error(self, error_msg: str):
         """更新检查失败"""
         self.window.settingsPanel.on_check_update_finished()
@@ -338,7 +318,7 @@ class Application:
             position=InfoBarPosition.TOP,
             duration=3000,
         )
-    
+
     def _signal_handler(self, sig: int, frame: object) -> None:
         """信号处理器：只置位事件，不在信号上下文做 I/O 或退出"""
         self._shutdown_event.set()
@@ -365,7 +345,7 @@ class Application:
         self.download_controller.close_service()
         logger.info("应用退出")
         self.app.quit()
-    
+
     def _on_app_closing(self):
         """应用关闭前保存"""
         logger.info("窗口关闭，保存缓存...")
@@ -389,24 +369,20 @@ class Application:
         except Exception:
             # InfoBar 在无可用父窗口时可能失败，忽略 UI 提示不影响配置保存
             pass
-    
+
     def run(self) -> int:
         """运行应用"""
         logger.info("显示主窗口")
         self.window.show()
-        
+
         # 启动时自动检查更新
         if self.config.auto_check_update:
             QTimer.singleShot(2000, self._auto_check_update)
-        
+
         result = self.app.exec()
         logger.info("应用事件循环结束")
         return result
-    
+
     def _auto_check_update(self):
         """启动时自动检查更新"""
-        self.update_checker.check_update(
-            self.config.update_channel,
-            __version__,
-            self.config.last_update_check_time
-        )
+        self.update_checker.check_update(self.config.update_channel, __version__, self.config.last_update_check_time)

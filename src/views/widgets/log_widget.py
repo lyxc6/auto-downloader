@@ -1,18 +1,26 @@
 """日志组件"""
-from PySide6.QtGui import QFont, QColor, QTextCursor, QTextCharFormat
 
-from qfluentwidgets import PlainTextEdit, isDarkTheme, qconfig, Theme
+from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
+from qfluentwidgets import PlainTextEdit, Theme, isDarkTheme, qconfig
 
 MAX_LOG_LINES = 2000
 
 # 浅色 / 深色文字配色
 _LIGHT = {
-    "info": "#1e1e1e", "success": "#0f7b0f", "error": "#c42b1c",
-    "warning": "#9d5d00", "header": "#0000ff", "dim": "#808080",
+    "info": "#1e1e1e",
+    "success": "#0f7b0f",
+    "error": "#c42b1c",
+    "warning": "#9d5d00",
+    "header": "#0000ff",
+    "dim": "#808080",
 }
 _DARK = {
-    "info": "#d4d4d4", "success": "#6a9955", "error": "#f44747",
-    "warning": "#cca700", "header": "#569cd6", "dim": "#808080",
+    "info": "#d4d4d4",
+    "success": "#6a9955",
+    "error": "#f44747",
+    "warning": "#cca700",
+    "header": "#569cd6",
+    "dim": "#808080",
 }
 
 

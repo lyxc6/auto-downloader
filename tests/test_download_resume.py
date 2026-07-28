@@ -9,6 +9,7 @@
 - 服务器忽略 Range 返回 200: 覆盖重下
 - 新文件正常下载
 """
+
 from unittest.mock import MagicMock
 
 import pytest
@@ -18,8 +19,7 @@ from src.services.downloader import DownloadService
 
 
 def _item(full_path: str = "a/b.bin", url: str = "http://x/b.bin") -> DownloadItem:
-    return DownloadItem(item_id=full_path, name="b.bin", url=url,
-                        item_type=ItemType.FILE, full_path=full_path)
+    return DownloadItem(item_id=full_path, name="b.bin", url=url, item_type=ItemType.FILE, full_path=full_path)
 
 
 def _stream_resp(status: int, chunks, content_length=None, accept_ranges=None):
@@ -45,6 +45,7 @@ def _head_resp(status: int, content_length=None, accept_ranges=None, raise_http=
         r.headers["accept-ranges"] = accept_ranges
     if raise_http:
         import requests
+
         r.raise_for_status.side_effect = requests.HTTPError("head", response=r)
     else:
         r.raise_for_status.return_value = None

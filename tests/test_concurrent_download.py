@@ -6,6 +6,7 @@
 - 统计 (completed/failed/skipped) 正确聚合
 - 取消后已启动任务能停止，未启动的不执行
 """
+
 import threading
 import time
 
@@ -16,8 +17,9 @@ from src.services.downloader import DownloadService
 
 
 def _item(item_id: str) -> DownloadItem:
-    return DownloadItem(item_id=item_id, name=item_id, url="http://x/" + item_id,
-                        item_type=ItemType.FILE, full_path=item_id)
+    return DownloadItem(
+        item_id=item_id, name=item_id, url="http://x/" + item_id, item_type=ItemType.FILE, full_path=item_id
+    )
 
 
 @pytest.fixture
@@ -29,6 +31,7 @@ def svc():
 
 def _measure(svc, items):
     """替换 download_file 为带真实 sleep 的计时假实现，返回 (stats, elapsed)"""
+
     def fake_download_file(item, download_dir):
         if svc.is_cancelled():
             item.status = DownloadStatus.FAILED

@@ -7,20 +7,20 @@
 - controller 提供 lock 保护的公共 close_service()
 - close_service() 在 _service 为 None 时安全
 """
+
 import threading
-import time
 from unittest.mock import MagicMock
 
 import pytest
 
-from src.services.scanner import ScanService
-from src.services.downloader import DownloadService
-from src.controllers.scan_controller import ScanController
 from src.controllers.download_controller import DownloadController
+from src.controllers.scan_controller import ScanController
 from src.models import AppConfig
-
+from src.services.downloader import DownloadService
+from src.services.scanner import ScanService
 
 # ----------------------------- 服务层 close/session 原子性 -----------------------------
+
 
 @pytest.mark.parametrize("make", [ScanService, lambda: DownloadService()])
 def test_close_acquires_lock(make):
@@ -87,10 +87,12 @@ def test_close_idempotent_concurrent(make):
 
 # ----------------------------- 控制器层 close_service -----------------------------
 
+
 @pytest.fixture
 def scan_ctrl():
     cfg = AppConfig()
     from src.models import CacheManager
+
     # close_service 测试不触发缓存 I/O，使用默认路径即可
     return ScanController(cfg, CacheManager(cfg.cache_file))
 

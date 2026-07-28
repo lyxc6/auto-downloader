@@ -5,6 +5,7 @@
 - _check_shutdown 在事件置位时保存缓存、关闭服务、退出应用，且只触发一次
 - 事件未置位时 _check_shutdown 不做任何事
 """
+
 import threading
 from unittest.mock import MagicMock
 

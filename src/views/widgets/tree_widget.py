@@ -1,12 +1,13 @@
 """树形组件扩展"""
+
 from collections import deque
-from typing import Callable, Dict, List, Optional, Set
-from PySide6.QtWidgets import QTreeWidgetItem, QHeaderView
+from collections.abc import Callable
+
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import QTreeWidgetItem
+from qfluentwidgets import RoundMenu, TreeWidget
 
-from qfluentwidgets import TreeWidget, RoundMenu
-
-from ...models import DownloadItem, ItemType
+from ...models import DownloadItem
 from ...utils.helpers import format_size
 
 
@@ -17,13 +18,13 @@ class DownloadTreeWidget(TreeWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._items: Dict[str, QTreeWidgetItem] = {}            # item_id -> QTreeWidgetItem（已实现节点）
-        self._all_items: Dict[str, DownloadItem] = {}        # item_id -> DownloadItem（全量扁平字典）
-        self._children_index: Dict[str, List[str]] = {}   # parent_id -> [child_id, ...]（预建索引）
-        self._loaded: Set[str] = set()        # 已 populate 子节点的 item_id
-        self._checked_set: Set[str] = set()   # 勾选真值源（文件 item_id 集合）
+        self._items: dict[str, QTreeWidgetItem] = {}  # item_id -> QTreeWidgetItem（已实现节点）
+        self._all_items: dict[str, DownloadItem] = {}  # item_id -> DownloadItem（全量扁平字典）
+        self._children_index: dict[str, list[str]] = {}  # parent_id -> [child_id, ...]（预建索引）
+        self._loaded: set[str] = set()  # 已 populate 子节点的 item_id
+        self._checked_set: set[str] = set()  # 勾选真值源（文件 item_id 集合）
         self._updating = False
-        self._check_sync_cb: Optional[Callable[[Set[str]], None]] = None
+        self._check_sync_cb: Callable[[set[str]], None] | None = None
         self._batch_expanding = False
         self.setHeaderLabels(["名称", "类型", "大小"])
         self.setColumnWidth(0, 300)
@@ -34,11 +35,11 @@ class DownloadTreeWidget(TreeWidget):
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
 
-    def set_check_sync_callback(self, cb: Optional[Callable[[Set[str]], None]]) -> None:
+    def set_check_sync_callback(self, cb: Callable[[set[str]], None] | None) -> None:
         """注册勾选状态实时同步回调（cb 接收 checked_ids 集合）"""
         self._check_sync_cb = cb
 
-    def load_from_items(self, items_dict: Dict[str, DownloadItem]) -> None:
+    def load_from_items(self, items_dict: dict[str, DownloadItem]) -> None:
         """一次性接收全量项，预建索引，仅 realize 根节点"""
         self.clear_all()
         self._all_items = dict(items_dict)
@@ -46,10 +47,12 @@ class DownloadTreeWidget(TreeWidget):
         for item in self._all_items.values():
             self._children_index.setdefault(item.parent_id, []).append(item.item_id)
         for child_ids in self._children_index.values():
-            child_ids.sort(key=lambda cid: (
-                0 if self._all_items[cid].is_dir else 1,
-                self._all_items[cid].name.lower(),
-            ))
+            child_ids.sort(
+                key=lambda cid: (
+                    0 if self._all_items[cid].is_dir else 1,
+                    self._all_items[cid].name.lower(),
+                )
+            )
         self._checked_set = set()
         self._updating = True
         try:
@@ -69,9 +72,7 @@ class DownloadTreeWidget(TreeWidget):
         tw.setData(0, Qt.ItemDataRole.UserRole, item_id)
         tw.setCheckState(0, self._compute_check_state(item_id))
         if self._children_index.get(item_id) and item_id not in self._loaded:
-            tw.setChildIndicatorPolicy(
-                QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator
-            )
+            tw.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
         if parent_item is None:
             self.addTopLevelItem(tw)
         else:
@@ -87,9 +88,7 @@ class DownloadTreeWidget(TreeWidget):
         if item_id in self._loaded:
             return
         self._loaded.add(item_id)
-        tw.setChildIndicatorPolicy(
-            QTreeWidgetItem.ChildIndicatorPolicy.DontShowIndicatorWhenChildless
-        )
+        tw.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.DontShowIndicatorWhenChildless)
         self._updating = True
         try:
             for cid in self._children_index.get(item_id, []):
@@ -114,8 +113,7 @@ class DownloadTreeWidget(TreeWidget):
         """从 _checked_set + 索引计算三态（不依赖 realized 子节点）"""
         item = self._all_items[item_id]
         if item.is_file:
-            return (Qt.CheckState.Checked if item_id in self._checked_set
-                    else Qt.CheckState.Unchecked)
+            return Qt.CheckState.Checked if item_id in self._checked_set else Qt.CheckState.Unchecked
         files = self._file_descendants(item_id)
         if not files:
             return Qt.CheckState.Unchecked
@@ -140,13 +138,11 @@ class DownloadTreeWidget(TreeWidget):
             elif parent_tw is not None and item.parent_id in self._loaded:
                 self._realize_node(item.item_id, parent_tw)
             elif parent_tw is not None:
-                parent_tw.setChildIndicatorPolicy(
-                    QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator
-                )
+                parent_tw.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
         finally:
             self._updating = False
 
-    def add_items_batch(self, items_list: List[DownloadItem]) -> None:
+    def add_items_batch(self, items_list: list[DownloadItem]) -> None:
         """批量添加（节流扫描信号路径）"""
         self._updating = True
         try:
@@ -154,18 +150,14 @@ class DownloadTreeWidget(TreeWidget):
                 if item.item_id in self._all_items:
                     continue
                 self._all_items[item.item_id] = item
-                self._children_index.setdefault(item.parent_id, []).append(
-                    item.item_id
-                )
+                self._children_index.setdefault(item.parent_id, []).append(item.item_id)
                 parent_tw = self._items.get(item.parent_id)
                 if item.parent_id == "":
                     self._realize_node(item.item_id, None)
                 elif parent_tw is not None and item.parent_id in self._loaded:
                     self._realize_node(item.item_id, parent_tw)
                 elif parent_tw is not None:
-                    parent_tw.setChildIndicatorPolicy(
-                        QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator
-                    )
+                    parent_tw.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
         finally:
             self._updating = False
 
@@ -187,20 +179,19 @@ class DownloadTreeWidget(TreeWidget):
             return tw.checkState(0) == Qt.CheckState.Checked
         return item_id in self._checked_set
 
-    def get_checked_items(self) -> List[str]:
+    def get_checked_items(self) -> list[str]:
         """获取所有选中项（O(1)，返回集合副本）"""
         return list(self._checked_set)
 
-    def get_checked_files(self) -> List[DownloadItem]:
+    def get_checked_files(self) -> list[DownloadItem]:
         """返回勾选的 DownloadItem 列表（从 _all_items + _checked_set，不依赖 cache_manager）"""
-        return [self._all_items[iid] for iid in self._checked_set
-                if iid in self._all_items and self._all_items[iid].is_file]
+        return [
+            self._all_items[iid] for iid in self._checked_set if iid in self._all_items and self._all_items[iid].is_file
+        ]
 
     def select_all(self):
         """全选：所有文件加入真值源，刷新已实现节点"""
-        self._checked_set = {
-            iid for iid, it in self._all_items.items() if it.is_file
-        }
+        self._checked_set = {iid for iid, it in self._all_items.items() if it.is_file}
         self._updating = True
         try:
             for iid, tw in self._items.items():
@@ -231,10 +222,7 @@ class DownloadTreeWidget(TreeWidget):
         self._updating = True
         try:
             item = self._all_items[item_id]
-            if item.is_file:
-                files = [item_id]
-            else:
-                files = self._file_descendants(item_id)
+            files = [item_id] if item.is_file else self._file_descendants(item_id)
             if checked:
                 self._checked_set.update(files)
             else:
@@ -346,7 +334,7 @@ class DownloadTreeWidget(TreeWidget):
         finally:
             self._updating = False
 
-    def apply_checked_items(self, checked_ids: Set[str]) -> None:
+    def apply_checked_items(self, checked_ids: set[str]) -> None:
         """按 checked_ids 设置真值源，并刷新已实现节点三态（恢复场景）"""
         self._checked_set = set(checked_ids)
         self._updating = True
@@ -378,14 +366,15 @@ class DownloadTreeWidget(TreeWidget):
             return
         menu = RoundMenu("", self)
         from PySide6.QtGui import QAction
+
         refresh_action = QAction("🔄 刷新此目录", self)
         refresh_action.triggered.connect(lambda checked=False, iid=item_id: self.refresh_dir_requested.emit(iid))
         menu.addAction(refresh_action)
         menu.exec_(self.viewport().mapToGlobal(pos))
 
-    def remove_children_of(self, dir_item_id: str) -> Set[str]:
+    def remove_children_of(self, dir_item_id: str) -> set[str]:
         """移除指定目录的所有子节点（含后代），保留目录自身。返回被移除的 item_id 集合"""
-        descendant_ids: Set[str] = set()
+        descendant_ids: set[str] = set()
         queue = deque(self._children_index.get(dir_item_id, []))
         while queue:
             cid = queue.popleft()
@@ -394,7 +383,7 @@ class DownloadTreeWidget(TreeWidget):
 
         tree_item = self._items.get(dir_item_id)
         if tree_item is not None:
-            realized_desc: Set[str] = set()
+            realized_desc: set[str] = set()
 
             def _collect_realized(tw_item, acc: set):
                 for i in range(tw_item.childCount()):
@@ -427,8 +416,6 @@ class DownloadTreeWidget(TreeWidget):
 
         tree_item = self._items.get(dir_item_id)
         if tree_item is not None and dir_item_id in self._all_items:
-            tree_item.setChildIndicatorPolicy(
-                QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator
-            )
+            tree_item.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
 
         return descendant_ids

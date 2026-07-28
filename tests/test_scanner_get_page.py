@@ -6,6 +6,7 @@
 - 5xx 重试满次数后返回 None
 - 网络错误重试满次数后返回 None
 """
+
 from unittest.mock import MagicMock
 
 import pytest
@@ -43,9 +44,7 @@ def test_get_page_returns_text_on_200(svc):
 
 def test_get_page_4xx_returns_none_without_retry(svc):
     """4xx 应立即返回 None，只请求一次"""
-    svc._session.get.return_value = _fake_response(
-        404, "<html>404 Not Found</html>", raise_http=True
-    )
+    svc._session.get.return_value = _fake_response(404, "<html>404 Not Found</html>", raise_http=True)
     result = svc.get_page("http://x", retries=3)
     assert result is None
     # 4xx 不重试：只调用一次
@@ -53,18 +52,14 @@ def test_get_page_4xx_returns_none_without_retry(svc):
 
 
 def test_get_page_403_returns_none_without_retry(svc):
-    svc._session.get.return_value = _fake_response(
-        403, "<html>forbidden</html>", raise_http=True
-    )
+    svc._session.get.return_value = _fake_response(403, "<html>forbidden</html>", raise_http=True)
     assert svc.get_page("http://x", retries=3) is None
     assert svc._session.get.call_count == 1
 
 
 def test_get_page_5xx_retries_then_none(svc):
     """5xx 应重试 retries 次，最终返回 None"""
-    svc._session.get.return_value = _fake_response(
-        503, "<html>server error</html>", raise_http=True
-    )
+    svc._session.get.return_value = _fake_response(503, "<html>server error</html>", raise_http=True)
     result = svc.get_page("http://x", retries=3)
     assert result is None
     # 重试 3 次 + 首次 = 4 次

@@ -5,8 +5,8 @@
 - 并发 set_checked_items + save + toggle_check 不丢失更新、不损坏缓存文件
 - url 的读写 (load/save/has_data_for) 受锁保护
 """
+
 import json
-import os
 import threading
 import time
 
@@ -18,8 +18,11 @@ from src.models.download_item import DownloadItem, ItemType
 
 def _make_item(item_id: str) -> DownloadItem:
     return DownloadItem(
-        item_id=item_id, name=item_id, url="http://x/" + item_id,
-        item_type=ItemType.FILE, full_path=item_id,
+        item_id=item_id,
+        name=item_id,
+        url="http://x/" + item_id,
+        item_type=ItemType.FILE,
+        full_path=item_id,
     )
 
 
@@ -83,7 +86,7 @@ def test_set_checked_items_atomic_with_save(cache, tmp_path):
     assert not errors, f"并发产生异常: {errors}"
 
     # 最终缓存文件应为合法 JSON
-    with open(cache.cache_file, "r", encoding="utf-8") as f:
+    with open(cache.cache_file, encoding="utf-8") as f:
         data = json.load(f)
     assert "tree_data" in data
     assert "checked_items" in data
@@ -116,9 +119,7 @@ def test_url_access_is_lock_protected(cache):
         except Exception as e:
             errors.append(e)
 
-    threads = [threading.Thread(target=url_setter),
-               threading.Thread(target=url_reader),
-               threading.Thread(target=saver)]
+    threads = [threading.Thread(target=url_setter), threading.Thread(target=url_reader), threading.Thread(target=saver)]
     for t in threads:
         t.start()
     time.sleep(0.4)

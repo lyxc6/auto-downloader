@@ -1,72 +1,75 @@
 """下载服务"""
+
 import copy
 import logging
 import os
-import time
 import threading
+import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import requests
-from typing import Callable, Optional
-from ..models import DownloadItem, DownloadStatus, DownloadStats
+
+from ..models import DownloadItem, DownloadStats, DownloadStatus
 
 logger = logging.getLogger(__name__)
 
 
 class DownloadService:
     """下载服务"""
-    
+
     def __init__(self, max_workers: int = 3, retry_times: int = 3, timeout: int = 120):
         self.max_workers = max_workers
         self.retry_times = retry_times
         self.timeout = timeout
-        self._session: Optional[requests.Session] = None
+        self._session: requests.Session | None = None
         self._cancel_flag = threading.Event()
         self._pause_flag = threading.Event()
         self._pause_flag.set()  # 初始为非暂停状态
         self._lock = threading.Lock()
-        
+
         # 回调函数
-        self.on_progress: Optional[Callable[[str, int, int], None]] = None  # item_id, downloaded, total
-        self.on_status_changed: Optional[Callable[[str, DownloadStatus], None]] = None
-        self.on_error: Optional[Callable[[str, str], None]] = None
-        self.on_complete: Optional[Callable[[str], None]] = None
-    
+        self.on_progress: Callable[[str, int, int], None] | None = None  # item_id, downloaded, total
+        self.on_status_changed: Callable[[str, DownloadStatus], None] | None = None
+        self.on_error: Callable[[str, str], None] | None = None
+        self.on_complete: Callable[[str], None] | None = None
+
     @property
     def session(self) -> requests.Session:
         """获取或创建session"""
         with self._lock:
             if self._session is None:
                 self._session = requests.Session()
-                self._session.headers.update({
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                })
+                self._session.headers.update(
+                    {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+                )
             return self._session
-    
+
     def cancel(self):
         """取消下载"""
         self._cancel_flag.set()
-    
+
     def pause(self):
         """暂停下载"""
         self._pause_flag.clear()
-    
+
     def resume(self):
         """恢复下载"""
         self._pause_flag.set()
-    
+
     def is_cancelled(self) -> bool:
         """是否已取消"""
         return self._cancel_flag.is_set()
-    
+
     def is_paused(self) -> bool:
         """是否暂停"""
         return not self._pause_flag.is_set()
-    
+
     def reset(self):
         """重置状态"""
         self._cancel_flag.clear()
         self._pause_flag.set()
-    
+
     def _get_remote_size_and_ranges(self, url: str):
         """获取远端文件大小与是否支持 Range
 
@@ -228,12 +231,12 @@ class DownloadService:
                 return False
 
         return False
-    
+
     def download_batch(
         self,
         items: list[DownloadItem],
         download_dir: str,
-        on_all_complete: Optional[Callable[[DownloadStats], None]] = None
+        on_all_complete: Callable[[DownloadStats], None] | None = None,
     ) -> DownloadStats:
         """批量下载（并发，并发度由 max_workers 控制）"""
         stats = DownloadStats()
@@ -282,7 +285,7 @@ class DownloadService:
             on_all_complete(stats)
 
         return stats
-    
+
     def close(self):
         """关闭session（原子，可重复调用）"""
         with self._lock:

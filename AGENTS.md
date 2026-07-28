@@ -13,30 +13,69 @@ Python PySide6 desktop app for downloading files from a remote file server. Chin
 - `src/services/` - Business logic (downloader, scanner)
 - `main.py` - Main startup script
 - `自动下载器.spec` - PyInstaller build spec
-- `requirements.txt` - Dependencies: PySide6, PySide6-Fluent-Widgets, requests, beautifulsoup4, Pillow
+- `requirements.txt` - Runtime dependencies
+- `requirements-dev.txt` - Dev/test/analysis dependencies
 
 ## Development Commands
 
 ```bash
 # Install dependencies
 pip install -r requirements.txt
+pip install -r requirements-dev.txt
 
 # Run GUI
 python main.py
 
-# Run tests
-python -m pytest
+# Tests
+pytest                              # all tests
+pytest -x                           # stop on first failure
+pytest -m "not slow"                # skip slow tests
+pytest --cov=src --cov-report=html  # coverage report (HTML in htmlcov/)
+pytest tests/test_foo.py            # single test file
+pytest -k "test_name"               # single test by name
+pytest -n auto                      # parallel (requires pytest-xdist)
 
-# Run single test
-python -m pytest tests/test_<name>.py
+# Lint & format
+ruff check src/ tests/              # lint check
+ruff check src/ tests/ --fix        # auto-fix fixable issues
+ruff format src/ tests/             # format all files
+ruff format --check src/ tests/     # check without modifying
 
 # Type checking
-python -m pyright src
+pyright src/
 
-# Build executable (PyInstaller)
-pyinstaller 自动下载器.spec
-# Output: dist/自动下载器.exe
+# Memory analysis
+memory_profiler your_script.py      # line-by-line memory (decorate functions with @profile)
+python -c "import objgraph; objgraph.show_growth()"  # track object growth
+python -c "from pympler import asizeof; print(asizeof.asizeof(obj))"  # object size
+
+# Performance
+py-spy top -- python main.py        # CPU sampling (best for GUI apps, low overhead)
+kernprof -l -v your_script.py       # line-by-line timing (decorate with @profile)
+
+# Build
+pyinstaller 自动下载器.spec          # output: dist/自动下载器.exe
 ```
+
+## Testing & Analysis Tools
+
+Quick reference for all available tools (installed via `requirements-dev.txt`):
+
+| Tool | Purpose | Command / Usage |
+|------|---------|-----------------|
+| `pytest` | Unit tests | `pytest` |
+| `pytest-cov` | Coverage | `pytest --cov=src --cov-report=html` |
+| `pytest-qt` | GUI testing | Use `qtbot` fixture |
+| `pytest-mock` | Mocking | Use `mocker` fixture |
+| `pytest-xdist` | Parallel tests | `pytest -n auto` |
+| `pytest-timeout` | Prevent hangs | Default 30s (configured in pyproject.toml) |
+| `ruff` | Lint + format | `ruff check` / `ruff format` |
+| `pyright` | Type checking | `pyright src/` |
+| `memory-profiler` | Line-by-line memory | `@profile` decorator + `memory_profiler` CLI |
+| `objgraph` | Object reference graph | `objgraph.show_growth()` / `objgraph.show_backrefs()` |
+| `pympler` | Object size analysis | `asizeof.asizeof()` / `muppy.show_usage()` |
+| `line-profiler` | Line-by-line timing | `@profile` decorator + `kernprof` CLI |
+| `py-spy` | CPU sampling profiler | `py-spy top -- python main.py` |
 
 ## FluentUI Constraint
 
@@ -78,6 +117,7 @@ from PySide6.QtWidgets import QPushButton, QLineEdit
 - HTTP requests use `requests.Session` with retry logic
 - PySide6 signal-slot pattern for UI updates
 - Use `qconfig` for theme persistence
+- Line endings: CRLF (configured in ruff format)
 
 ## Gotchas
 
@@ -86,3 +126,4 @@ from PySide6.QtWidgets import QPushButton, QLineEdit
 - Auto-save timer saves cache every 30s during active scan/download; stops when both are idle. Refresh keeps checked items and prunes entries no longer present on the server (incremental, preserves expand/scroll state).
 - Signal handler (SIGINT) registered for emergency cache save on Ctrl+C
 - PyInstaller build requires `collect_data_files('qfluentwidgets')` for FluentUI assets
+- `qfluentwidgets` lacks type stubs—pyright will report ~150 `reportUnknownMemberType` errors; this is expected and harmless

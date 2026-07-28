@@ -8,7 +8,9 @@
 - get_checked_items O(1) 返回集合，与 realize 状态无关
 - add_item 增量更新索引但不强制 realize
 """
+
 import os
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
@@ -25,9 +27,13 @@ def _make_items() -> dict:
     def add(iid: str, itype: ItemType, size: int = 0):
         name = iid.split("/")[-1]
         items[iid] = DownloadItem(
-            item_id=iid, name=name, url="", item_type=itype,
+            item_id=iid,
+            name=name,
+            url="",
+            item_type=itype,
             parent_id="/".join(iid.split("/")[:-1]),
-            full_path=iid, size=size,
+            full_path=iid,
+            size=size,
         )
 
     add("A", ItemType.DIR)
@@ -105,9 +111,13 @@ def test_deselect_all_clears(tree):
 
 def test_add_item_incremental_updates_index(tree):
     new_item = DownloadItem(
-        item_id="A/sub1/new.txt", name="new.txt", url="",
-        item_type=ItemType.FILE, parent_id="A/sub1",
-        full_path="A/sub1/new.txt", size=50,
+        item_id="A/sub1/new.txt",
+        name="new.txt",
+        url="",
+        item_type=ItemType.FILE,
+        parent_id="A/sub1",
+        full_path="A/sub1/new.txt",
+        size=50,
     )
     tree.add_item(new_item)
     assert "A/sub1/new.txt" in tree._all_items
