@@ -83,7 +83,7 @@ class CacheManager:
             return False
 
     def save(self, url: str = ""):
-        """保存缓存"""
+        """保存缓存（原子写入：先写临时文件，再替换，避免崩溃时缓存损坏）"""
         try:
             with self._lock:
                 if url:
@@ -101,8 +101,12 @@ class CacheManager:
                 }
 
             os.makedirs(os.path.dirname(self.cache_file), exist_ok=True)
-            with open(self.cache_file, "w", encoding="utf-8") as f:
+            temp_file = self.cache_file + ".tmp"
+            with open(temp_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+
+            # 原子替换：在 Windows 上 os.replace 会自动处理
+            os.replace(temp_file, self.cache_file)
 
             return True
 
