@@ -21,10 +21,10 @@ class ScanController(QObject):
     scan_completed = Signal(int, int)  # files, dirs
     scan_error = Signal(str)  # error_message
     log_message = Signal(str, str)  # message, level
+    dir_scanned = Signal(str)  # dir_path（目录扫描完成）
 
-    # 缓存/刷新相关信号
+    # 缓存相关信号
     cache_load_completed = Signal(dict, set)  # tree_data, checked_items（缓存加载完成）
-    refresh_cleanup = Signal(set)  # to_remove_ids（清理刷新产生的僵尸节点）
 
     def __init__(self, config: AppConfig, cache_manager: CacheManager, parent: QObject | None = None):
         super().__init__(parent)
@@ -35,9 +35,7 @@ class ScanController(QObject):
         self._is_scanning = False
         self._lock = threading.Lock()
 
-        # 刷新状态
-        self._refreshing = False
-        self._refresh_old_ids: set[str] = set()
+        # 刷新状态（scanned_dirs 备份，用于错误恢复）
         self._refresh_scanned_backup: set[str] | None = None
 
     @property
@@ -140,6 +138,7 @@ class ScanController(QObject):
                 def on_dir_scanned(dir_path: str):
                     nonlocal dirs_completed, last_progress_log
                     self.cache_manager.mark_dir_scanned(dir_path)
+                    self.dir_scanned.emit(dir_path)
                     with _cb_lock:
                         dirs_completed += 1
                         now = monotonic()
@@ -271,7 +270,10 @@ class ScanController(QObject):
                             last_flush = monotonic()
 
                 self._service.on_item_found = on_item_found
-                self._service.on_dir_scanned = lambda dp: self.cache_manager.mark_dir_scanned(dp)
+                self._service.on_dir_scanned = lambda dp: (
+                    self.cache_manager.mark_dir_scanned(dp),
+                    self.dir_scanned.emit(dp),
+                )
 
                 self._service.scan_directory(
                     base_url, dir_path=dir_path, parent_id=parent_id, depth=0, max_depth=self.config.max_depth
@@ -378,8 +380,6 @@ class ScanController(QObject):
             self.cache_manager.scanned_dirs.clear()
         self.cache_manager.clear_tree_data_only()
         self.cache_manager.set_url(url)
-        self._refreshing = True
-        self._refresh_old_ids = set(self.cache_manager.tree_data.keys())
 
         self.start_scan(url, scan_mode=scan_mode, parallel=parallel)
 
@@ -402,19 +402,8 @@ class ScanController(QObject):
         self.start_directory_scan(base_url, item_full_path, item_parent_id)
 
     def _on_scan_completed_internal(self, file_count: int, dir_count: int):
-        """扫描完成处理（处理刷新分支的僵尸节点清理）"""
-        # 刷新分支：增量修剪僵尸节点 + 清理失效勾选
-        if self._refreshing:
-            new_ids = set(self.cache_manager.tree_data.keys())
-            to_remove = self._refresh_old_ids - new_ids
-            # 发射信号通知视图层清理僵尸节点
-            self.refresh_cleanup.emit(to_remove)
-            self.cache_manager.cleanup_checked()
-            self._refreshing = False
-            self._refresh_old_ids.clear()
-            self._refresh_scanned_backup = None
-
-        # 保存缓存
+        """扫描完成处理"""
+        self._refresh_scanned_backup = None
         self.cache_manager.save()
 
     def _on_scan_error_internal(self, error_msg: str):
@@ -422,6 +411,4 @@ class ScanController(QObject):
         if self._refresh_scanned_backup is not None:
             self.cache_manager.restore_scanned_dirs(self._refresh_scanned_backup)
             self._refresh_scanned_backup = None
-            self._refreshing = False
-            self._refresh_old_ids.clear()
             logger.info("刷新失败，已恢复 scanned_dirs 备份")

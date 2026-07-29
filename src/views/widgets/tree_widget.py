@@ -14,15 +14,16 @@ from ...utils.helpers import format_size
 class DownloadTreeWidget(TreeWidget):
     """下载树形组件（虚拟加载）"""
 
-    refresh_dir_requested = Signal(str)  # item_id：右键刷新目录
+    refresh_dir_requested = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._items: dict[str, QTreeWidgetItem] = {}  # item_id -> QTreeWidgetItem（已实现节点）
-        self._all_items: dict[str, DownloadItem] = {}  # item_id -> DownloadItem（全量扁平字典）
-        self._children_index: dict[str, list[str]] = {}  # parent_id -> [child_id, ...]（预建索引）
-        self._loaded: set[str] = set()  # 已 populate 子节点的 item_id
-        self._checked_set: set[str] = set()  # 勾选真值源（文件 item_id 集合）
+        self._items: dict[str, QTreeWidgetItem] = {}
+        self._all_items: dict[str, DownloadItem] = {}
+        self._children_index: dict[str, list[str]] = {}
+        self._loaded: set[str] = set()
+        self._checked_set: set[str] = set()
+        self._unscanned_dirs: set[str] = set()
         self._updating = False
         self._check_sync_cb: Callable[[set[str]], None] | None = None
         self._batch_expanding = False
@@ -39,6 +40,11 @@ class DownloadTreeWidget(TreeWidget):
         """注册勾选状态实时同步回调（cb 接收 checked_ids 集合）"""
         self._check_sync_cb = cb
 
+    @staticmethod
+    def _sort_key(item: DownloadItem) -> tuple:
+        """排序键：目录优先，按名称字母顺序"""
+        return (0 if item.is_dir else 1, item.name.lower())
+
     def load_from_items(self, items_dict: dict[str, DownloadItem]) -> None:
         """一次性接收全量项，预建索引，仅 realize 根节点"""
         self.clear_all()
@@ -47,12 +53,7 @@ class DownloadTreeWidget(TreeWidget):
         for item in self._all_items.values():
             self._children_index.setdefault(item.parent_id, []).append(item.item_id)
         for child_ids in self._children_index.values():
-            child_ids.sort(
-                key=lambda cid: (
-                    0 if self._all_items[cid].is_dir else 1,
-                    self._all_items[cid].name.lower(),
-                )
-            )
+            child_ids.sort(key=lambda cid: self._sort_key(self._all_items[cid]))
         self._checked_set = set()
         self._updating = True
         try:
@@ -66,7 +67,7 @@ class DownloadTreeWidget(TreeWidget):
         item = self._all_items[item_id]
         tw = QTreeWidgetItem()
         tw.setText(0, item.name)
-        tw.setText(1, "📁" if item.is_dir else "📄")
+        tw.setText(1, self._dir_icon(item_id) if item.is_dir else "📄")
         tw.setText(2, format_size(item.size) if item.is_file else "")
         tw.setFlags(tw.flags() | Qt.ItemFlag.ItemIsUserCheckable)
         tw.setData(0, Qt.ItemDataRole.UserRole, item_id)
@@ -80,13 +81,68 @@ class DownloadTreeWidget(TreeWidget):
         self._items[item_id] = tw
         return tw
 
+    def _dir_icon(self, item_id: str) -> str:
+        """目录状态图标：📂=未扫描完成, 📁=已扫描完成"""
+        return "📂" if item_id in self._unscanned_dirs else "📁"
+
     def apply_scan_status(self, unscanned_dirs: set[str]) -> None:
-        """更新目录节点的扫描状态图标（📂=未完成, 📁=已完成）"""
+        """更新目录节点的扫描状态图标"""
+        self._unscanned_dirs = set(unscanned_dirs)
         for item_id, tw in self._items.items():
             item = self._all_items.get(item_id)
             if item and item.is_dir:
-                icon = "📂" if item_id in unscanned_dirs else "📁"
-                tw.setText(1, icon)
+                tw.setText(1, self._dir_icon(item_id))
+
+    def mark_dir_scanned(self, dir_id: str) -> None:
+        """单个目录扫描完成：从未扫描集合移除并更新图标"""
+        self._unscanned_dirs.discard(dir_id)
+        tw = self._items.get(dir_id)
+        if tw is not None:
+            tw.setText(1, self._dir_icon(dir_id))
+
+    def _sort_children_of(self, parent_id: str) -> None:
+        """对指定父节点的子节点排序（索引+Qt 树）"""
+        child_ids = self._children_index.get(parent_id)
+        if not child_ids or len(child_ids) <= 1:
+            return
+        child_ids.sort(key=lambda cid: self._sort_key(self._all_items[cid]))
+        if parent_id == "":
+            self._reorder_top_level_items(child_ids)
+        elif parent_id in self._loaded:
+            parent_tw = self._items.get(parent_id)
+            if parent_tw is not None:
+                self._reorder_child_items(parent_tw, child_ids)
+
+    def _reorder_top_level_items(self, sorted_ids: list[str]) -> None:
+        """按排序后的 item_id 顺序重排顶级节点"""
+        item_map: dict[str, QTreeWidgetItem] = {}
+        while self.topLevelItemCount() > 0:
+            tw = self.takeTopLevelItem(0)
+            cid = tw.data(0, Qt.ItemDataRole.UserRole)
+            if cid:
+                item_map[cid] = tw
+        for cid in sorted_ids:
+            tw = item_map.pop(cid, None)
+            if tw is not None:
+                self.addTopLevelItem(tw)
+        # 剩余项（不应出现）按原顺序补回
+        for tw in item_map.values():
+            self.addTopLevelItem(tw)
+
+    def _reorder_child_items(self, parent_tw: QTreeWidgetItem, sorted_ids: list[str]) -> None:
+        """按排序后的 item_id 顺序重排子节点"""
+        item_map: dict[str, QTreeWidgetItem] = {}
+        while parent_tw.childCount() > 0:
+            tw = parent_tw.takeChild(0)
+            cid = tw.data(0, Qt.ItemDataRole.UserRole)
+            if cid:
+                item_map[cid] = tw
+        for cid in sorted_ids:
+            tw = item_map.pop(cid, None)
+            if tw is not None:
+                parent_tw.addChild(tw)
+        for tw in item_map.values():
+            parent_tw.addChild(tw)
 
     def _on_item_expanded(self, tw):
         """展开时按需 populate 子节点"""
@@ -152,6 +208,7 @@ class DownloadTreeWidget(TreeWidget):
 
     def add_items_batch(self, items_list: list[DownloadItem]) -> None:
         """批量添加（节流扫描信号路径）"""
+        affected_parents: set[str] = set()
         self._updating = True
         try:
             for item in items_list:
@@ -159,6 +216,9 @@ class DownloadTreeWidget(TreeWidget):
                     continue
                 self._all_items[item.item_id] = item
                 self._children_index.setdefault(item.parent_id, []).append(item.item_id)
+                affected_parents.add(item.parent_id)
+                if item.is_dir:
+                    self._unscanned_dirs.add(item.item_id)
                 parent_tw = self._items.get(item.parent_id)
                 if item.parent_id == "":
                     self._realize_node(item.item_id, None)
@@ -167,6 +227,8 @@ class DownloadTreeWidget(TreeWidget):
                 elif parent_tw is not None:
                     parent_tw.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
         finally:
+            for pid in affected_parents:
+                self._sort_children_of(pid)
             self._updating = False
 
     def toggle_check(self, item_id: str):
@@ -352,6 +414,10 @@ class DownloadTreeWidget(TreeWidget):
         finally:
             self._updating = False
 
+    def mark_loaded(self, item_id: str) -> None:
+        """标记节点为已加载（子节点已填充或即将在扫描中增量填充）"""
+        self._loaded.add(item_id)
+
     def clear_all(self):
         """清空所有"""
         self.clear()
@@ -360,6 +426,7 @@ class DownloadTreeWidget(TreeWidget):
         self._children_index.clear()
         self._loaded.clear()
         self._checked_set.clear()
+        self._unscanned_dirs.clear()
 
     def _show_context_menu(self, pos):
         """显示右键菜单"""

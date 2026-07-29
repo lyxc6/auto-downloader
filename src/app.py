@@ -94,10 +94,10 @@ class Application:
         self.scan_controller.scan_progress.connect(self._on_scan_progress)
         self.scan_controller.scan_completed.connect(self._on_scan_completed)
         self.scan_controller.scan_error.connect(self._on_scan_error)
+        self.scan_controller.dir_scanned.connect(self.window.downloadPanel.tree_widget.mark_dir_scanned)
 
-        # 缓存/刷新相关信号
+        # 缓存相关信号
         self.scan_controller.cache_load_completed.connect(self._on_cache_load_completed)
-        self.scan_controller.refresh_cleanup.connect(self._on_refresh_cleanup)
 
         self.download_controller.log_message.connect(download_panel.add_log)
         self.download_controller.progress_updated.connect(self._on_download_progress)
@@ -171,6 +171,12 @@ class Application:
 
     def _on_refresh_requested(self, url: str):
         """刷新请求处理"""
+        # 清除 Widget 内部数据，防止僵尸节点残留
+        tw = self.window.downloadPanel.tree_widget
+        checked_backup = set(self.cache_manager.checked_items)
+        tw.clear_all()
+        tw._checked_set = checked_backup  # 恢复已选集，新到达节点能正确显示勾选状态
+
         self.config.last_url = url
         self.config.save()
 
@@ -199,7 +205,7 @@ class Application:
         # 删除子节点
         tw = self.window.downloadPanel.tree_widget
         tw.remove_children_of(item_id)
-        tw._loaded.add(item_id)  # 重新标记为已加载，确保扫描完成后新子节点能被添加到UI
+        tw.mark_loaded(item_id)
 
         # 更新统计
         stats = self.cache_manager.get_stats()
@@ -224,14 +230,6 @@ class Application:
 
         # 显示目录扫描状态
         self.window.downloadPanel.tree_widget.apply_scan_status(self.cache_manager.get_unscanned_dirs())
-
-    def _on_refresh_cleanup(self, to_remove: set):
-        """刷新清理：移除僵尸节点"""
-        tw = self.window.downloadPanel.tree_widget
-        # 按路径深度降序（叶先父后），避免处理已销毁的子节点
-        for item_id in sorted(to_remove, key=lambda i: i.count("/"), reverse=True):
-            tw.remove_item(item_id)
-        tw.recompute_parent_states()
 
     def _on_scan_progress(self, files: int, dirs: int):
         """扫描进度更新"""
