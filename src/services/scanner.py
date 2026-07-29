@@ -652,18 +652,18 @@ class ScanService:
 
     # ==================== 分页获取方法 ====================
 
-    def get_all_pages(self, base_url: str, dir_path: str = "") -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    def get_all_pages(self, base_url: str, dir_path: str = "", raw_href: str = "") -> tuple[list[tuple[str, str, str]], list[tuple[str, str]]]:
         """获取目录下所有项目（串行模式）"""
-        return self._get_all_pages_internal(base_url, dir_path, session=None)
+        return self._get_all_pages_internal(base_url, dir_path, session=None, raw_href=raw_href)
 
     def _get_all_pages_threadsafe(
-        self, base_url: str, dir_path: str = ""
-    ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+        self, base_url: str, dir_path: str = "", raw_href: str = ""
+    ) -> tuple[list[tuple[str, str, str]], list[tuple[str, str]]]:
         """获取目录下所有项目（并行模式，每线程独立 session）"""
         session = requests.Session()
         session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
         try:
-            return self._get_all_pages_internal(base_url, dir_path, session=session)
+            return self._get_all_pages_internal(base_url, dir_path, session=session, raw_href=raw_href)
         finally:
             session.close()
 
@@ -672,16 +672,17 @@ class ScanService:
         base_url: str,
         dir_path: str = "",
         session: requests.Session | None = None,
-    ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+        raw_href: str = "",
+    ) -> tuple[list[tuple[str, str, str]], list[tuple[str, str]]]:
         """获取目录下所有项目（内部实现）"""
-        all_dirs: list[tuple[str, str]] = []
+        all_dirs: list[tuple[str, str, str]] = []
         all_files: list[tuple[str, str]] = []
 
         # 启动目录级计时器
         self._start_dir_timer()
 
         # 1. 获取第1页，确定总页数
-        url1 = self._build_page_url(base_url, dir_path, 1)
+        url1 = self._build_page_url(base_url, dir_path, 1, raw_href=raw_href)
         html1 = self._get_page_session(session, url1) if session is not None else self.get_page(url1)
         if not html1:
             return all_dirs, all_files
@@ -712,15 +713,28 @@ class ScanService:
         # 2. 并行获取剩余页面（仅在并行模式下）
         if self.parallel_mode and total_pages > 2:
             return self._fetch_pages_parallel(
-                base_url, dir_path, session, total_pages, all_dirs, all_files
+                base_url, dir_path, session, total_pages, all_dirs, all_files, raw_href=raw_href
             )
         else:
             return self._fetch_pages_serial(
-                base_url, dir_path, session, total_pages, all_dirs, all_files
+                base_url, dir_path, session, total_pages, all_dirs, all_files, raw_href=raw_href
             )
 
-    def _build_page_url(self, base_url: str, dir_path: str, page: int) -> str:
-        """构建页面URL"""
+    def _build_page_url(self, base_url: str, dir_path: str, page: int, raw_href: str = "") -> str:
+        """构建页面URL
+
+        Args:
+            base_url: 基础URL
+            dir_path: 目录路径（逻辑路径）
+            page: 页码
+            raw_href: 服务器返回的原始href（双重编码），优先使用
+        """
+        if raw_href:
+            # 使用服务器返回的原始href，保持编码格式一致
+            if page > 1:
+                sep = "&" if "?" in raw_href else "?"
+                return base_url + raw_href + f"{sep}page={page}"
+            return base_url + raw_href
         if dir_path:
             query = f"?dir={quote(dir_path)}"
             if page > 1:
@@ -737,12 +751,15 @@ class ScanService:
         all_dirs: list,
         all_files: list,
     ):
-        """合并页面项目到总列表"""
+        """合并页面项目到总列表
+
+        Returns dirs as (full_path, name, raw_href) 三元组，保留原始href用于URL构建
+        """
         for item_type, name, href in items:
             if item_type == "dir":
                 full_path = f"{dir_path}/{name}" if dir_path else name
-                if (full_path, name) not in all_dirs:
-                    all_dirs.append((full_path, name))
+                if not any(d[0] == full_path for d in all_dirs):
+                    all_dirs.append((full_path, name, href))
             else:
                 file_url = urljoin(base_url, href)
                 if (name, file_url) not in all_files:
@@ -756,7 +773,8 @@ class ScanService:
         total_pages: int,
         all_dirs: list,
         all_files: list,
-    ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+        raw_href: str = "",
+    ) -> tuple[list[tuple[str, str, str]], list[tuple[str, str]]]:
         """串行获取多页"""
         for page in range(2, total_pages + 1):
             # 检查目录级超时（优先级高于全局超时）
@@ -769,7 +787,7 @@ class ScanService:
             if self._should_stop():
                 break
 
-            url = self._build_page_url(base_url, dir_path, page)
+            url = self._build_page_url(base_url, dir_path, page, raw_href=raw_href)
             html = self._get_page_session(session, url) if session is not None else self.get_page(url)
             if not html:
                 break
@@ -792,7 +810,8 @@ class ScanService:
         total_pages: int,
         all_dirs: list,
         all_files: list,
-    ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+        raw_href: str = "",
+    ) -> tuple[list[tuple[str, str, str]], list[tuple[str, str]]]:
         """并行获取多页"""
         # 检查目录级超时
         if self._is_dir_timeout():
@@ -819,7 +838,7 @@ class ScanService:
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_to_page = {
                     executor.submit(
-                        self._fetch_single_page, base_url, dir_path, session, page
+                        self._fetch_single_page, base_url, dir_path, session, page, raw_href
                     ): page
                     for page in page_tasks
                 }
@@ -855,10 +874,10 @@ class ScanService:
 
     def _fetch_single_page(
         self, base_url: str, dir_path: str,
-        session: requests.Session, page: int
+        session: requests.Session, page: int, raw_href: str = ""
     ) -> str | None:
         """获取单个页面"""
-        url = self._build_page_url(base_url, dir_path, page)
+        url = self._build_page_url(base_url, dir_path, page, raw_href=raw_href)
         return self._get_page_session(session, url)
 
     # ==================== 主扫描方法 ====================
@@ -904,7 +923,7 @@ class ScanService:
     # ==================== DFS 串行扫描 ====================
 
     def _scan_dfs(
-        self, base_url: str, max_depth: int, dir_path: str = "", parent_id: str = "", depth: int = 0
+        self, base_url: str, max_depth: int, dir_path: str = "", parent_id: str = "", depth: int = 0, raw_href: str = ""
     ) -> list[DownloadItem]:
         """深度优先串行扫描"""
         items: list[DownloadItem] = []
@@ -915,12 +934,12 @@ class ScanService:
         if dir_path and self._is_dir_scanned(dir_path):
             return items
 
-        dirs, files = self.get_all_pages(base_url, dir_path)
+        dirs, files = self.get_all_pages(base_url, dir_path, raw_href=raw_href)
         is_empty = not dirs and not files
         self._log_scan_result(dir_path, dirs, files, is_empty)
 
         # 处理子目录
-        for full_path, name in dirs:
+        for full_path, name, child_href in dirs:
             if self._should_stop():
                 break
 
@@ -938,7 +957,7 @@ class ScanService:
                 self.on_item_found(item)
 
             time.sleep(self._scan_delay)
-            sub_items = self._scan_dfs(base_url, max_depth, full_path, full_path, depth + 1)
+            sub_items = self._scan_dfs(base_url, max_depth, full_path, full_path, depth + 1, raw_href=child_href)
             items.extend(sub_items)
 
         # 处理文件
@@ -971,19 +990,19 @@ class ScanService:
     # ==================== BFS 串行扫描 ====================
 
     def _scan_bfs(
-        self, base_url: str, max_depth: int, dir_path: str = "", parent_id: str = "", depth: int = 0
+        self, base_url: str, max_depth: int, dir_path: str = "", parent_id: str = "", depth: int = 0, raw_href: str = ""
     ) -> list[DownloadItem]:
         """广度优先串行扫描（逐层扫描，先显示一级目录再逐层深入）"""
         all_items: list[DownloadItem] = []
-        queue: deque[tuple[str, str, int]] = deque()
-        queue.append((dir_path, parent_id, depth))
+        queue: deque[tuple[str, str, int, str]] = deque()
+        queue.append((dir_path, parent_id, depth, raw_href))
 
         while queue and not self._should_stop():
-            current_level: list[tuple[str, str, int]] = []
+            current_level: list[tuple[str, str, int, str]] = []
             while queue:
                 current_level.append(queue.popleft())
 
-            for current_path, _current_parent, current_depth in current_level:
+            for current_path, _current_parent, current_depth, current_href in current_level:
                 if self._should_stop():
                     break
                 if current_depth > max_depth:
@@ -991,12 +1010,12 @@ class ScanService:
                 if current_path and self._is_dir_scanned(current_path):
                     continue
 
-                dirs, files = self.get_all_pages(base_url, current_path)
+                dirs, files = self.get_all_pages(base_url, current_path, raw_href=current_href)
                 is_empty = not dirs and not files
                 self._log_scan_result(current_path, dirs, files, is_empty)
 
                 # 处理子目录并加入队列
-                for full_path, name in dirs:
+                for full_path, name, child_href in dirs:
                     if self._should_stop():
                         break
 
@@ -1013,7 +1032,7 @@ class ScanService:
                     if self.on_item_found:
                         self.on_item_found(item)
 
-                    queue.append((full_path, full_path, current_depth + 1))
+                    queue.append((full_path, full_path, current_depth + 1, child_href))
                     time.sleep(self._scan_delay)
 
                 # 处理文件
@@ -1046,7 +1065,7 @@ class ScanService:
     # ==================== DFS 并行扫描 ====================
 
     def _scan_dfs_parallel(
-        self, base_url: str, max_depth: int, max_workers: int = 3, dir_path: str = "", parent_id: str = ""
+        self, base_url: str, max_depth: int, max_workers: int = 3, dir_path: str = "", parent_id: str = "", raw_href: str = ""
     ) -> list[DownloadItem]:
         """深度优先并行扫描"""
         all_items: list[DownloadItem] = []
@@ -1055,7 +1074,7 @@ class ScanService:
 
         try:
             self._scan_dfs_parallel_recursive(
-                base_url, dir_path, parent_id, 0, max_depth, max_workers, executor, all_items, items_lock
+                base_url, dir_path, parent_id, 0, max_depth, max_workers, executor, all_items, items_lock, raw_href=raw_href
             )
         finally:
             executor.shutdown(wait=False)
@@ -1073,6 +1092,7 @@ class ScanService:
         executor: ThreadPoolExecutor,
         all_items: list[DownloadItem],
         items_lock: threading.Lock,
+        raw_href: str = "",
     ):
         """DFS 并行扫描递归实现"""
         if depth > max_depth or self._should_stop():
@@ -1082,7 +1102,7 @@ class ScanService:
             return
 
         # 获取当前目录内容
-        dirs, files = self._get_all_pages_threadsafe(base_url, dir_path)
+        dirs, files = self._get_all_pages_threadsafe(base_url, dir_path, raw_href=raw_href)
         is_empty = not dirs and not files
         self._log_scan_result(dir_path, dirs, files, is_empty)
 
@@ -1107,7 +1127,7 @@ class ScanService:
                 self.on_item_found(item)
 
         # 处理当前目录的子目录
-        for full_path, name in dirs:
+        for full_path, name, child_href in dirs:
             if self._should_stop():
                 break
 
@@ -1130,7 +1150,7 @@ class ScanService:
             futures = {}
             root_futures: dict = {}
 
-            for full_path, name in dirs:
+            for full_path, name, child_href in dirs:
                 if self._should_stop():
                     break
                 future = executor.submit(
@@ -1144,6 +1164,7 @@ class ScanService:
                     executor,
                     all_items,
                     items_lock,
+                    raw_href=child_href,
                 )
                 futures[future] = full_path
                 if depth == 0:
@@ -1174,13 +1195,13 @@ class ScanService:
     # ==================== BFS 并行扫描 ====================
 
     def _scan_bfs_parallel(
-        self, base_url: str, max_depth: int, max_workers: int = 3, dir_path: str = "", parent_id: str = ""
+        self, base_url: str, max_depth: int, max_workers: int = 3, dir_path: str = "", parent_id: str = "", raw_href: str = ""
     ) -> list[DownloadItem]:
         """广度优先并行扫描（逐层并行）"""
         all_items: list[DownloadItem] = []
         items_lock = threading.Lock()
-        queue: deque[tuple[str, str, int]] = deque()
-        queue.append((dir_path, parent_id, 0))
+        queue: deque[tuple[str, str, int, str]] = deque()
+        queue.append((dir_path, parent_id, 0, raw_href))
 
         executor = ThreadPoolExecutor(max_workers=max_workers)
         try:
@@ -1188,20 +1209,20 @@ class ScanService:
 
             while queue and not self._should_stop():
                 # 收集当前层任务
-                current_level: list[tuple[str, str, int]] = []
+                current_level: list[tuple[str, str, int, str]] = []
                 while queue:
                     current_level.append(queue.popleft())
 
                 # 并行处理当前层
                 futures = {}
-                for path, pid, d in current_level:
+                for path, pid, d, cur_href in current_level:
                     if self._should_stop():
                         break
                     if d > max_depth:
                         continue
                     if path and self._is_dir_scanned(path):
                         continue
-                    future = executor.submit(self._scan_single_dir_threadsafe, base_url, path)
+                    future = executor.submit(self._scan_single_dir_threadsafe, base_url, path, cur_href)
                     futures[future] = (path, pid, d)
 
                 # 等待当前层完成
@@ -1235,7 +1256,7 @@ class ScanService:
                                 self.on_item_found(item)
 
                         # 处理子目录并加入队列
-                        for full_path, name in dirs:
+                        for full_path, name, child_href in dirs:
                             if self._should_stop():
                                 break
                             item = self._create_item(
@@ -1250,7 +1271,7 @@ class ScanService:
                                 all_items.append(item)
                             if self.on_item_found:
                                 self.on_item_found(item)
-                            queue.append((full_path, full_path, d + 1))
+                            queue.append((full_path, full_path, d + 1, child_href))
 
                         # BFS即时标记：每个目录扫描完成后立即标记
                         if not self._should_stop():
@@ -1279,10 +1300,10 @@ class ScanService:
         return all_items
 
     def _scan_single_dir_threadsafe(
-        self, base_url: str, dir_path: str
-    ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+        self, base_url: str, dir_path: str, raw_href: str = ""
+    ) -> tuple[list[tuple[str, str, str]], list[tuple[str, str]]]:
         """线程安全的扫描单个目录（用于并行 BFS）"""
-        return self._get_all_pages_threadsafe(base_url, dir_path)
+        return self._get_all_pages_threadsafe(base_url, dir_path, raw_href=raw_href)
 
     def close(self):
         """关闭session（原子，可重复调用）"""

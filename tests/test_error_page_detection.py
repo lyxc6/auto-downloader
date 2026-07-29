@@ -39,10 +39,10 @@ class TestErrorPageDetection:
     def test_normal_page_not_affected(self, service):
         """测试正常页面不受影响"""
         html = """
-        <ul>
-            <li><a href="?dir=folder1">📁 folder1</a></li>
-            <li><a href="file1.txt">📄 file1.txt</a></li>
-        </ul>
+        <div id="webdav-list">
+            <li style="margin:8px 0;"><a href="?dir=folder1">folder1</a></li>
+            <li style="margin:8px 0;"><a href="file1.txt">file1.txt</a></li>
+        </div>
         """
         items = service.parse_items(html)
         assert len(items) == 2
@@ -75,9 +75,9 @@ class TestErrorPageDetection:
         <div style="margin-bottom:15px;padding:10px;background:#d4edda;color:#155724;border-radius:4px;">
             <strong>成功：</strong> 操作完成
         </div>
-        <ul>
-            <li><a href="file1.txt">📄 file1.txt</a></li>
-        </ul>
+        <div id="webdav-list">
+            <li style="margin:8px 0;"><a href="file1.txt">file1.txt</a></li>
+        </div>
         """
         items = service.parse_items(html)
         assert len(items) == 1
@@ -125,9 +125,9 @@ class TestErrorPageDetectionIntegration:
         """测试正常页面不增加错误计数器"""
         with patch.object(service, 'get_page') as mock_get:
             mock_get.return_value = """
-            <ul>
-                <li><a href="file1.txt">📄 file1.txt</a></li>
-            </ul>
+            <div id="webdav-list">
+                <li style="margin:8px 0;"><a href="file1.txt">file1.txt</a></li>
+            </div>
             """
 
             initial_count = service.get_error_dirs_count()
