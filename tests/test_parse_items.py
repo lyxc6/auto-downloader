@@ -112,6 +112,36 @@ class TestParseItemsBasic:
         assert items[1] == ("file", "file1.txt", "file1.txt")
         assert items[2] == ("dir", "folder2", "?dir=folder2")
 
+    def test_emoji_prefix_removed(self, service):
+        """测试 Emoji 前缀被正确移除"""
+        html = """
+        <div id="webdav-list">
+            <li style="margin:8px 0;"><a href="?dir=folder1">📁 folder1</a></li>
+            <li style="margin:8px 0;"><a href="file1.txt">📄 file1.txt</a></li>
+            <li style="margin:8px 0;"><a href="?dir=folder2">📁 folder2</a></li>
+        </div>
+        """
+        items = service.parse_items(html)
+        assert len(items) == 3
+        assert items[0] == ("dir", "folder1", "?dir=folder1")
+        assert items[1] == ("file", "file1.txt", "file1.txt")
+        assert items[2] == ("dir", "folder2", "?dir=folder2")
+
+    def test_emoji_prefix_with_chinese(self, service):
+        """测试中文名称的 Emoji 前缀移除"""
+        html = """
+        <div id="webdav-list">
+            <li style="margin:8px 0;"><a href="?dir=audio/3000">📁 3000</a></li>
+            <li style="margin:8px 0;"><a href="?dir=audio/陈奕迅">📁 陈奕迅</a></li>
+            <li style="margin:8px 0;"><a href="audio/song.mp3">📄 song.mp3</a></li>
+        </div>
+        """
+        items = service.parse_items(html)
+        assert len(items) == 3
+        assert items[0] == ("dir", "3000", "?dir=audio/3000")
+        assert items[1] == ("dir", "陈奕迅", "?dir=audio/陈奕迅")
+        assert items[2] == ("file", "song.mp3", "audio/song.mp3")
+
 
 class TestParseItemsFiltering:
     """测试过滤条件"""

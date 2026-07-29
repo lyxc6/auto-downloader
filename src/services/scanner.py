@@ -4,6 +4,7 @@ import hashlib
 import logging
 import re
 import threading
+import re
 import time
 from collections import deque
 from collections.abc import Callable
@@ -562,6 +563,8 @@ class ScanService:
 
             href = str(a.get("href", ""))
             text = a.get_text(strip=True)
+            # 去除开头的 Emoji 字符（📁、📄 等）
+            text = re.sub(r'^[\U0001F4C0-\U0001F4FF\u2600-\u26FF\u2700-\u27BF]+\s*', '', text)
 
             if not href or href == "#":
                 continue
