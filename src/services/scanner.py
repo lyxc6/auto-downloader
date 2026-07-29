@@ -8,7 +8,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import cast
+from typing import ClassVar, cast
 from urllib.parse import quote, urljoin
 
 import requests
@@ -23,10 +23,10 @@ class RetryPolicy:
     """重试策略"""
 
     # 可重试的HTTP状态码
-    RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+    RETRYABLE_STATUS_CODES: ClassVar[set[int]] = {429, 500, 502, 503, 504}
 
     # 不可重试的HTTP状态码
-    NON_RETRYABLE_STATUS_CODES = {400, 401, 403, 404, 405, 410}
+    NON_RETRYABLE_STATUS_CODES: ClassVar[set[int]] = {400, 401, 403, 404, 405, 410}
 
     @staticmethod
     def get_retry_config(status_code: int | None) -> dict:
@@ -90,6 +90,7 @@ class ScanService:
         self,
         scan_delay: float = 0.02,
         scan_timeout: float = 300.0,
+        dir_scan_timeout: float = 30.0,
     ):
         self._session: requests.Session | None = None
         self._cancel_flag = threading.Event()
@@ -100,7 +101,10 @@ class ScanService:
         # 扫描参数
         self._scan_delay = scan_delay
         self._scan_timeout = scan_timeout
+        self._dir_scan_timeout = dir_scan_timeout
         self._start_time: float = time.monotonic()
+        self._dir_start_time: float = 0.0
+        self._last_progress_time: float = time.monotonic()
 
         # 回调函数
         self.on_item_found: Callable[[DownloadItem], None] | None = None
@@ -117,6 +121,17 @@ class ScanService:
         # 失败统计
         self._failed_dirs = 0
         self._failed_dirs_lock = threading.Lock()
+        self._error_dirs = 0
+        self._error_dirs_lock = threading.Lock()
+
+        # 分页信息缓存：dir_path -> total_pages
+        self._page_cache: dict[str, int] = {}
+        self._page_cache_lock = threading.Lock()
+
+        # 分页结构缓存：hash(url) -> (total_pages, content_hash)
+        self._structure_cache: dict[str, tuple[int, str]] = {}
+        self._structure_cache_lock = threading.Lock()
+        self._max_cache_size = 1000
 
     @property
     def session(self) -> requests.Session:
@@ -138,15 +153,32 @@ class ScanService:
         return self._cancel_flag.is_set()
 
     def is_timeout(self) -> bool:
-        """是否已超时"""
+        """是否已超时（无进展超时）"""
         if self._scan_timeout <= 0:
             return False
-        return (time.monotonic() - self._start_time) >= self._scan_timeout
+        return (time.monotonic() - self._last_progress_time) >= self._scan_timeout
+
+    def _update_progress(self):
+        """更新进展时间（发现新内容时调用）"""
+        self._last_progress_time = time.monotonic()
+
+    def _is_dir_timeout(self) -> bool:
+        """检查当前目录是否超时"""
+        if self._dir_scan_timeout <= 0:
+            return False
+        if self._dir_start_time <= 0:
+            return False
+        return (time.monotonic() - self._dir_start_time) >= self._dir_scan_timeout
+
+    def _start_dir_timer(self):
+        """启动目录级计时器"""
+        self._dir_start_time = time.monotonic()
 
     def reset(self):
         """重置状态"""
         self._cancel_flag.clear()
         self._start_time = time.monotonic()
+        self._last_progress_time = time.monotonic()
         self._parallel_dirs_completed = 0
 
     def set_scanned_dirs(self, dirs: set[str]):
@@ -191,6 +223,16 @@ class ScanService:
         with self._scanned_dirs_lock:
             return dir_path in self._scanned_dirs
 
+    def _increment_error_dirs(self):
+        """增加错误目录计数器"""
+        with self._error_dirs_lock:
+            self._error_dirs += 1
+
+    def get_error_dirs_count(self) -> int:
+        """获取错误目录数量"""
+        with self._error_dirs_lock:
+            return self._error_dirs
+
     def _mark_dir_scanned(self, dir_path: str):
         """标记目录为已扫描（线程安全）"""
         with self._scanned_dirs_lock:
@@ -212,11 +254,82 @@ class ScanService:
         """检查是否应该停止扫描（取消或超时）"""
         return self.is_cancelled() or self.is_timeout()
 
+    # ==================== 分页缓存方法 ====================
+
+    def _get_dir_cache_key(self, base_url: str, dir_path: str) -> str:
+        """生成目录缓存key"""
+        full_url = f"{base_url}?dir={dir_path}" if dir_path else base_url
+        return hashlib.md5(full_url.encode()).hexdigest()
+
+    def _get_content_hash(self, html: str) -> str:
+        """计算内容哈希"""
+        soup = BeautifulSoup(html, "html.parser")
+
+        # 提取分页相关元素
+        page_elements = []
+        for a in soup.find_all("a", href=True):
+            href = str(a["href"])
+            if "page=" in href:
+                page_elements.append(href)
+
+        # 提取分页容器
+        for el in soup.find_all(True):
+            raw_cls = cast("str | list[str]", el.get("class") or [])
+            cls: list[str] = [raw_cls] if isinstance(raw_cls, str) else raw_cls
+            cls_str = " ".join(cls).lower() if cls else ""
+            if "pag" in cls_str or "page" in cls_str:
+                page_elements.append(el.get_text(" "))
+
+        content = "|".join(sorted(page_elements))
+        return hashlib.md5(content.encode()).hexdigest()
+
+    def get_cached_page_info(
+        self, base_url: str, dir_path: str, html: str
+    ) -> tuple[int, bool]:
+        """获取缓存的分页信息
+
+        Returns:
+            (total_pages, is_cache_hit)
+        """
+        cache_key = self._get_dir_cache_key(base_url, dir_path)
+        content_hash = self._get_content_hash(html)
+
+        with self._structure_cache_lock:
+            if cache_key in self._structure_cache:
+                cached_pages, cached_hash = self._structure_cache[cache_key]
+                if cached_hash == content_hash:
+                    return cached_pages, True
+                else:
+                    # 内容变化，需要重新解析
+                    del self._structure_cache[cache_key]
+
+        # 解析总页数
+        total = self._parse_total_pages(html)
+
+        # 缓存结果
+        with self._structure_cache_lock:
+            if len(self._structure_cache) >= self._max_cache_size:
+                # 简单策略：删除最旧的缓存
+                oldest_key = next(iter(self._structure_cache))
+                del self._structure_cache[oldest_key]
+            self._structure_cache[cache_key] = (total, content_hash)
+
+        return total, False
+
+    def clear_page_cache(self):
+        """清空分页缓存"""
+        with self._page_cache_lock:
+            self._page_cache.clear()
+        with self._structure_cache_lock:
+            self._structure_cache.clear()
+
     # ==================== HTTP 请求方法 ====================
 
     def get_page(self, url: str, retries: int = 3) -> str | None:
-        """获取页面内容"""
-        for i in range(retries + 1):
+        """获取页面内容（智能重试）"""
+        attempt = 0
+
+        while attempt <= retries:
             if self._should_stop():
                 return None
 
@@ -226,33 +339,98 @@ class ScanService:
                 resp.encoding = "utf-8"
                 return resp.text
             except requests.HTTPError as e:
-                status = e.response.status_code if e.response is not None else None
-                if status is not None and 400 <= status < 500:
-                    logger.warning("获取页面失败(4xx): %s -> %s", url, status)
+                status_code = e.response.status_code if e.response is not None else None
+
+                # 获取重试配置
+                retry_config = RetryPolicy.get_retry_config(status_code)
+                max_retries = min(retries, retry_config["max_retries"])
+
+                # 检查是否应该重试
+                if attempt >= max_retries:
+                    logger.error("获取页面失败(不再重试): %s -> %s", url, status_code)
                     if self.on_error:
-                        self.on_error(f"页面不存在或无权限: {status}")
+                        self.on_error(f"获取页面失败: HTTP {status_code}")
                     return None
-                if i < retries:
-                    logger.warning("获取页面重试 %d/%d: %s -> %s", i + 1, retries, url, e)
-                    time.sleep(2)
-                    continue
-                logger.error("获取页面失败: %s -> %s", url, e)
-                if self.on_error:
-                    self.on_error(f"获取页面失败: {e}")
-                return None
+
+                # 计算延迟
+                delay = RetryPolicy.calculate_delay(attempt, retry_config)
+                logger.warning(
+                    "获取页面重试 %d/%d: %s -> %s (等待 %.1f秒)",
+                    attempt + 1, max_retries, url, status_code, delay
+                )
+                time.sleep(delay)
+                attempt += 1
+
+            except requests.ConnectionError as e:
+                # 连接错误，可重试
+                retry_config = RetryPolicy.get_retry_config(None)
+                max_retries = min(retries, retry_config["max_retries"])
+
+                if attempt >= max_retries:
+                    logger.error("获取页面失败(连接错误): %s -> %s", url, e)
+                    if self.on_error:
+                        self.on_error(f"连接失败: {e}")
+                    return None
+
+                delay = RetryPolicy.calculate_delay(attempt, retry_config)
+                logger.warning(
+                    "获取页面重试 %d/%d: %s -> %s (等待 %.1f秒)",
+                    attempt + 1, max_retries, url, e, delay
+                )
+                time.sleep(delay)
+                attempt += 1
+
+            except requests.Timeout as e:
+                # 超时错误，可重试
+                retry_config = RetryPolicy.get_retry_config(None)
+                max_retries = min(retries, retry_config["max_retries"])
+
+                if attempt >= max_retries:
+                    logger.error("获取页面失败(超时): %s -> %s", url, e)
+                    if self.on_error:
+                        self.on_error(f"请求超时: {e}")
+                    return None
+
+                delay = RetryPolicy.calculate_delay(attempt, retry_config)
+                logger.warning(
+                    "获取页面重试 %d/%d: %s -> %s (等待 %.1f秒)",
+                    attempt + 1, max_retries, url, e, delay
+                )
+                time.sleep(delay)
+                attempt += 1
+
             except Exception as e:
-                if i < retries:
-                    logger.warning("获取页面重试 %d/%d: %s -> %s", i + 1, retries, url, e)
-                    time.sleep(2)
-                    continue
-                logger.error("获取页面失败: %s -> %s", url, e)
-                if self.on_error:
-                    self.on_error(f"获取页面失败: {e}")
-                return None
+                # 其他错误，保守重试
+                retry_config = RetryPolicy.get_retry_config(None)
+                max_retries = min(retries, retry_config["max_retries"])
+
+                if attempt >= max_retries:
+                    logger.error("获取页面失败: %s -> %s", url, e)
+                    if self.on_error:
+                        self.on_error(f"获取页面失败: {e}")
+                    return None
+
+                delay = RetryPolicy.calculate_delay(attempt, retry_config)
+                logger.warning(
+                    "获取页面重试 %d/%d: %s -> %s (等待 %.1f秒)",
+                    attempt + 1, max_retries, url, e, delay
+                )
+                time.sleep(delay)
+                attempt += 1
+
+        return None
 
     def _get_page_session(self, session: requests.Session, url: str, retries: int = 3) -> str | None:
-        """使用指定 session 获取页面内容（线程安全）"""
-        for i in range(retries + 1):
+        """使用指定 session 获取页面内容（智能重试，线程安全）"""
+        attempt = 0
+
+        while attempt <= retries:
+            # 检查目录级超时（优先级高于全局超时）
+            if self._is_dir_timeout():
+                logger.warning("目录扫描超时，停止重试: %s", url)
+                return None
+
+            # 检查全局超时
             if self._should_stop():
                 return None
 
@@ -262,33 +440,94 @@ class ScanService:
                 resp.encoding = "utf-8"
                 return resp.text
             except requests.HTTPError as e:
-                status = e.response.status_code if e.response is not None else None
-                if status is not None and 400 <= status < 500:
-                    logger.warning("获取页面失败(4xx): %s -> %s", url, status)
+                status_code = e.response.status_code if e.response is not None else None
+
+                # 获取重试配置
+                retry_config = RetryPolicy.get_retry_config(status_code)
+                max_retries = min(retries, retry_config["max_retries"])
+
+                # 检查是否应该重试
+                if attempt >= max_retries:
+                    logger.error("获取页面失败(不再重试): %s -> %s", url, status_code)
                     if self.on_error:
-                        self.on_error(f"页面不存在或无权限: {status}")
+                        self.on_error(f"获取页面失败: HTTP {status_code}")
+                    with self._failed_dirs_lock:
+                        self._failed_dirs += 1
                     return None
-                if i < retries:
-                    logger.warning("获取页面重试 %d/%d: %s -> %s", i + 1, retries, url, e)
-                    time.sleep(2)
-                    continue
-                logger.error("获取页面失败: %s -> %s", url, e)
-                if self.on_error:
-                    self.on_error(f"获取页面失败: {e}")
-                with self._failed_dirs_lock:
-                    self._failed_dirs += 1
-                return None
+
+                # 计算延迟
+                delay = RetryPolicy.calculate_delay(attempt, retry_config)
+                logger.warning(
+                    "获取页面重试 %d/%d: %s -> %s (等待 %.1f秒)",
+                    attempt + 1, max_retries, url, status_code, delay
+                )
+                time.sleep(delay)
+                attempt += 1
+
+            except requests.ConnectionError as e:
+                # 连接错误，可重试
+                retry_config = RetryPolicy.get_retry_config(None)
+                max_retries = min(retries, retry_config["max_retries"])
+
+                if attempt >= max_retries:
+                    logger.error("获取页面失败(连接错误): %s -> %s", url, e)
+                    if self.on_error:
+                        self.on_error(f"连接失败: {e}")
+                    with self._failed_dirs_lock:
+                        self._failed_dirs += 1
+                    return None
+
+                delay = RetryPolicy.calculate_delay(attempt, retry_config)
+                logger.warning(
+                    "获取页面重试 %d/%d: %s -> %s (等待 %.1f秒)",
+                    attempt + 1, max_retries, url, e, delay
+                )
+                time.sleep(delay)
+                attempt += 1
+
+            except requests.Timeout as e:
+                # 超时错误，可重试
+                retry_config = RetryPolicy.get_retry_config(None)
+                max_retries = min(retries, retry_config["max_retries"])
+
+                if attempt >= max_retries:
+                    logger.error("获取页面失败(超时): %s -> %s", url, e)
+                    if self.on_error:
+                        self.on_error(f"请求超时: {e}")
+                    with self._failed_dirs_lock:
+                        self._failed_dirs += 1
+                    return None
+
+                delay = RetryPolicy.calculate_delay(attempt, retry_config)
+                logger.warning(
+                    "获取页面重试 %d/%d: %s -> %s (等待 %.1f秒)",
+                    attempt + 1, max_retries, url, e, delay
+                )
+                time.sleep(delay)
+                attempt += 1
+
             except Exception as e:
-                if i < retries:
-                    logger.warning("获取页面重试 %d/%d: %s -> %s", i + 1, retries, url, e)
-                    time.sleep(2)
-                    continue
-                logger.error("获取页面失败: %s -> %s", url, e)
-                if self.on_error:
-                    self.on_error(f"获取页面失败: {e}")
-                with self._failed_dirs_lock:
-                    self._failed_dirs += 1
-                return None
+                # 其他错误，保守重试
+                retry_config = RetryPolicy.get_retry_config(None)
+                max_retries = min(retries, retry_config["max_retries"])
+
+                if attempt >= max_retries:
+                    logger.error("获取页面失败: %s -> %s", url, e)
+                    if self.on_error:
+                        self.on_error(f"获取页面失败: {e}")
+                    with self._failed_dirs_lock:
+                        self._failed_dirs += 1
+                    return None
+
+                delay = RetryPolicy.calculate_delay(attempt, retry_config)
+                logger.warning(
+                    "获取页面重试 %d/%d: %s -> %s (等待 %.1f秒)",
+                    attempt + 1, max_retries, url, e, delay
+                )
+                time.sleep(delay)
+                attempt += 1
+
+        return None
 
     # ==================== HTML 解析方法 ====================
 
@@ -301,7 +540,22 @@ class ScanService:
         soup = BeautifulSoup(html, "html.parser")
         items: list[tuple[str, str, str]] = []
 
-        for li in soup.select("li"):
+        # 检测服务端错误页面
+        error_div = soup.find("div", style=lambda s: s and "background:#f8d7da" in s)
+        if error_div:
+            error_text = error_div.get_text(strip=True)
+            if "错误" in error_text or "XML Parsing Failed" in error_text:
+                logger.warning("检测到服务端错误页面: %s", error_text)
+                return items
+
+        # 严格模式：必须找到 #webdav-list 容器
+        webdav_list = soup.find(id="webdav-list")
+        if not webdav_list:
+            logger.warning("未找到 #webdav-list 容器")
+            return items
+
+        # 遍历 #webdav-list 下的 li 元素，宽松匹配 style 包含 margin:8px
+        for li in webdav_list.find_all("li", style=lambda s: s and "margin:8px" in s):
             a = li.find("a")
             if not a:
                 continue
@@ -311,20 +565,19 @@ class ScanService:
 
             if not href or href == "#":
                 continue
-            if "flyingfry.cc" in href and "dir=" not in href:
-                continue
             if "返回上级" in text:
                 continue
 
-            if text.startswith("📁"):
-                items.append(("dir", text[2:].strip(), href))
-            elif text.startswith("📄"):
-                items.append(("file", text[2:].strip(), href))
+            # 根据 href 判断类型
+            if "dir=" in href:
+                items.append(("dir", text, href))
+            else:
+                items.append(("file", text, href))
 
         return items
 
-    def get_total_pages(self, html: str) -> int:
-        """获取总页数
+    def get_total_pages(self, html: str, dir_path: str = "") -> int:
+        """获取总页数（带缓存）
 
         解析优先级：
         1. 分页链接 ``?page=N`` 中的最大页码（最可靠）
@@ -332,6 +585,35 @@ class ScanService:
         3. 含分页语义关键词（当前/第 ... 页）的 ``N/M`` 文本
         4. 默认 1
         """
+        # 检查缓存
+        if dir_path:
+            with self._page_cache_lock:
+                if dir_path in self._page_cache:
+                    cached = self._page_cache[dir_path]
+                    # 验证缓存是否仍然有效
+                    actual = self._parse_total_pages(html)
+                    if actual != cached:
+                        logger.warning(
+                            "分页缓存不匹配: dir=%s, cached=%d, actual=%d",
+                            dir_path, cached, actual
+                        )
+                        # 更新缓存并返回实际值
+                        self._page_cache[dir_path] = actual
+                        return actual
+                    return cached
+
+        # 解析总页数
+        total = self._parse_total_pages(html)
+
+        # 缓存结果
+        if dir_path:
+            with self._page_cache_lock:
+                self._page_cache[dir_path] = total
+
+        return total
+
+    def _parse_total_pages(self, html: str) -> int:
+        """解析总页数（原始逻辑）"""
         soup = BeautifulSoup(html, "html.parser")
 
         # 1. 从分页链接提取最大页码
@@ -391,47 +673,190 @@ class ScanService:
         """获取目录下所有项目（内部实现）"""
         all_dirs: list[tuple[str, str]] = []
         all_files: list[tuple[str, str]] = []
-        page = 1
 
-        while True:
+        # 启动目录级计时器
+        self._start_dir_timer()
+
+        # 1. 获取第1页，确定总页数
+        url1 = self._build_page_url(base_url, dir_path, 1)
+        html1 = self._get_page_session(session, url1) if session is not None else self.get_page(url1)
+        if not html1:
+            return all_dirs, all_files
+
+        # 检查目录级超时
+        if self._is_dir_timeout():
+            logger.warning("目录扫描超时，跳过: %s", dir_path or "/")
+            return all_dirs, all_files
+
+        items1 = self.parse_items(html1)
+
+        # 检测服务器错误页面（返回200但内容为空）
+        if not items1 and html1:
+            error_div = BeautifulSoup(html1, "html.parser").find("div", style=lambda s: s and "background:#f8d7da" in s)
+            if error_div:
+                self._increment_error_dirs()
+                logger.warning("检测到服务器错误页面: %s", dir_path or "/")
+
+        self._merge_items(items1, dir_path, base_url, all_dirs, all_files)
+
+        total_pages = self.get_total_pages(html1, dir_path)
+        if self.on_log and not self.parallel_mode:
+            self.on_log(f"  获取页面 1/{total_pages}", "dim")
+
+        if total_pages <= 1:
+            return all_dirs, all_files
+
+        # 2. 并行获取剩余页面（仅在并行模式下）
+        if self.parallel_mode and total_pages > 2:
+            return self._fetch_pages_parallel(
+                base_url, dir_path, session, total_pages, all_dirs, all_files
+            )
+        else:
+            return self._fetch_pages_serial(
+                base_url, dir_path, session, total_pages, all_dirs, all_files
+            )
+
+    def _build_page_url(self, base_url: str, dir_path: str, page: int) -> str:
+        """构建页面URL"""
+        if dir_path:
+            query = f"?dir={quote(dir_path)}"
+            if page > 1:
+                query += f"&page={page}"
+        else:
+            query = f"?page={page}" if page > 1 else ""
+        return base_url + query
+
+    def _merge_items(
+        self,
+        items: list[tuple[str, str, str]],
+        dir_path: str,
+        base_url: str,
+        all_dirs: list,
+        all_files: list,
+    ):
+        """合并页面项目到总列表"""
+        for item_type, name, href in items:
+            if item_type == "dir":
+                full_path = f"{dir_path}/{name}" if dir_path else name
+                if (full_path, name) not in all_dirs:
+                    all_dirs.append((full_path, name))
+            else:
+                file_url = urljoin(base_url, href)
+                if (name, file_url) not in all_files:
+                    all_files.append((name, file_url))
+
+    def _fetch_pages_serial(
+        self,
+        base_url: str,
+        dir_path: str,
+        session: requests.Session | None,
+        total_pages: int,
+        all_dirs: list,
+        all_files: list,
+    ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+        """串行获取多页"""
+        for page in range(2, total_pages + 1):
+            # 检查目录级超时（优先级高于全局超时）
+            if self._is_dir_timeout():
+                logger.warning("目录扫描超时，停止获取后续页面: %s (已获取 %d/%d 页)",
+                              dir_path or "/", page - 1, total_pages)
+                break
+
+            # 检查全局超时
             if self._should_stop():
                 break
 
-            if dir_path:
-                query = f"?dir={quote(dir_path)}"
-                if page > 1:
-                    query += f"&page={page}"
-            else:
-                query = f"?page={page}" if page > 1 else ""
-            url = base_url + query
-
+            url = self._build_page_url(base_url, dir_path, page)
             html = self._get_page_session(session, url) if session is not None else self.get_page(url)
             if not html:
                 break
 
             items = self.parse_items(html)
+            self._merge_items(items, dir_path, base_url, all_dirs, all_files)
 
-            for item_type, name, href in items:
-                if item_type == "dir":
-                    full_path = f"{dir_path}/{name}" if dir_path else name
-                    if (full_path, name) not in all_dirs:
-                        all_dirs.append((full_path, name))
-                else:
-                    file_url = urljoin(base_url, href)
-                    if (name, file_url) not in all_files:
-                        all_files.append((name, file_url))
-
-            total = self.get_total_pages(html)
             if self.on_log and not self.parallel_mode:
-                self.on_log(f"  获取页面 {page}/{total}", "dim")
+                self.on_log(f"  获取页面 {page}/{total_pages}", "dim")
 
-            if page >= total:
-                break
-
-            page += 1
             time.sleep(self._scan_delay)
 
         return all_dirs, all_files
+
+    def _fetch_pages_parallel(
+        self,
+        base_url: str,
+        dir_path: str,
+        session: requests.Session | None,
+        total_pages: int,
+        all_dirs: list,
+        all_files: list,
+    ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+        """并行获取多页"""
+        # 检查目录级超时
+        if self._is_dir_timeout():
+            logger.warning("目录扫描超时，跳过并行获取: %s", dir_path or "/")
+            return all_dirs, all_files
+
+        # 创建独立session用于并行请求
+        if session is None:
+            session = requests.Session()
+            session.headers.update({
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            })
+            close_session = True
+        else:
+            close_session = False
+
+        try:
+            # 准备页面任务
+            page_tasks = list(range(2, total_pages + 1))
+            page_results: dict[int, list[tuple[str, str, str]]] = {}
+
+            # 使用较小的线程池，避免过多并发
+            max_workers = min(len(page_tasks), 3)
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_page = {
+                    executor.submit(
+                        self._fetch_single_page, base_url, dir_path, session, page
+                    ): page
+                    for page in page_tasks
+                }
+
+                for future in as_completed(future_to_page):
+                    # 检查目录级超时
+                    if self._is_dir_timeout():
+                        logger.warning("目录扫描超时，取消并行获取: %s", dir_path or "/")
+                        break
+                    # 检查全局超时
+                    if self._should_stop():
+                        break
+                    page = future_to_page[future]
+                    try:
+                        html = future.result()
+                        if html:
+                            items = self.parse_items(html)
+                            page_results[page] = items
+                            if self.on_log and not self.parallel_mode:
+                                self.on_log(f"  获取页面 {page}/{total_pages}", "dim")
+                    except Exception as e:
+                        logger.warning("并行获取页面 %d 失败: %s", page, e)
+
+            # 按页码顺序合并结果
+            for page in sorted(page_results.keys()):
+                items = page_results[page]
+                self._merge_items(items, dir_path, base_url, all_dirs, all_files)
+
+            return all_dirs, all_files
+        finally:
+            if close_session:
+                session.close()
+
+    def _fetch_single_page(
+        self, base_url: str, dir_path: str,
+        session: requests.Session, page: int
+    ) -> str | None:
+        """获取单个页面"""
+        url = self._build_page_url(base_url, dir_path, page)
+        return self._get_page_session(session, url)
 
     # ==================== 主扫描方法 ====================
 
