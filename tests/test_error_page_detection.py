@@ -118,8 +118,8 @@ class TestErrorPageDetectionIntegration:
 
             # 应该检测到错误页面并增加计数器
             assert service.get_error_dirs_count() == initial_count + 1
-            # 应该返回空列表
-            assert result == ([], [])
+            # 应该返回空列表和错误标志
+            assert result == ([], [], True)
 
     def test_normal_page_not_increment_counter(self, service):
         """测试正常页面不增加错误计数器"""

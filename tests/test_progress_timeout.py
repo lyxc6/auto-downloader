@@ -121,12 +121,13 @@ class TestProgressTimeoutIntegration:
         service._last_progress_time = time.monotonic()
 
         # 模拟成功获取页面
-        with patch.object(service, '_get_page_session') as mock_get:
-            mock_get.return_value = """
-            <ul>
-                <li><a href="file.txt">file.txt</a></li>
-            </ul>
-            """
+        html = """
+        <ul>
+            <li><a href="file.txt">file.txt</a></li>
+        </ul>
+        """
+        with patch.object(service, 'get_page') as mock_get:
+            mock_get.return_value = html
 
             # 调用 _get_all_pages_internal
             result = service._get_all_pages_internal("https://example.com", "test_dir")
@@ -148,7 +149,8 @@ class TestProgressTimeoutIntegration:
         with patch.object(service, '_get_all_pages_internal') as mock_get:
             mock_get.return_value = (
                 [],  # dirs
-                [("file.txt", "https://example.com/file.txt")]  # files
+                [("file.txt", "https://example.com/file.txt")],  # files
+                False  # has_error
             )
 
             # 调用 scan
