@@ -40,7 +40,10 @@ class FakeService:
         self.on_log = None
         self.on_dir_scanned = None
 
-    def scan_directory(self, url, max_depth=10):
+    def _update_progress(self):
+        pass
+
+    def scan(self, url, scan_mode="dfs", parallel=False, max_depth=10, max_workers=3, dir_path="", parent_id=""):
         for action in self.script:
             if action[0] == "item":
                 self.on_item_found(action[1])
@@ -55,6 +58,9 @@ class FakeService:
         pass
 
     def is_cancelled(self):
+        return False
+
+    def is_timeout(self):
         return False
 
     def set_scanned_dirs(self, dirs):
@@ -75,7 +81,7 @@ def _fake_item(i):
 @pytest.fixture
 def make_controller(monkeypatch):
     def _make(script, clock):
-        config = type("C", (), {"max_depth": 5})()
+        config = type("C", (), {"max_depth": 5, "scan_max_workers": 3})()
         cache = type(
             "C",
             (),
