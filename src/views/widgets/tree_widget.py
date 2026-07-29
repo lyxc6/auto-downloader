@@ -472,7 +472,10 @@ class DownloadTreeWidget(TreeWidget):
             for did in realized_desc:
                 tw = self._items.pop(did, None)
                 if tw is not None:
-                    parent = tw.parent()
+                    try:
+                        parent = tw.parent()
+                    except RuntimeError:
+                        continue  # C++ 对象已删除（因父节点被移除时连带销毁）
                     if parent is not None:
                         parent.removeChild(tw)
                     else:
