@@ -8,12 +8,13 @@ from typing import Any
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QApplication
-from qfluentwidgets import InfoBar, InfoBarPosition
+from qfluentwidgets import InfoBar, InfoBarPosition, MessageDialog
 
 from . import __version__
 from .controllers import DownloadController, ScanController
 from .models import AppConfig, CacheManager, DownloadItem
-from .services import UpdateChecker
+from .services import UpdateChecker, cleanup_old_exe
+from .services.update_checker import GITHUB_RELEASES_URL
 from .utils.logger import setup_logging
 from .views import MainWindow
 
@@ -27,6 +28,9 @@ class Application:
         # 初始化日志
         setup_logging()
         logger.info("应用启动")
+
+        # 清理旧版本残留文件
+        cleanup_old_exe()
 
         # 设置高DPI支持
         QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
@@ -114,6 +118,9 @@ class Application:
         # 更新检查器信号
         self.update_checker.check_finished.connect(self._on_update_check_finished)
         self.update_checker.check_error.connect(self._on_update_check_error)
+        self.update_checker.download_progress.connect(self._on_update_download_progress)
+        self.update_checker.download_finished.connect(self._on_update_download_finished)
+        self.update_checker.download_error.connect(self._on_update_download_error)
 
         self.window.downloadPanel.tree_widget.set_check_sync_callback(self._on_checked_changed)
 
@@ -316,24 +323,30 @@ class Application:
 
         if result.get("has_update"):
             version = result.get("version", "")
-            _url = result.get("url", "")
+            url = result.get("url", "")
+            download_url = result.get("download_url", "")
             notes = result.get("notes", "")
-
-            content = f"发现新版本 v{version}"
-            if notes:
-                content += f"\n{notes[:100]}..."
-
-            InfoBar.success(
-                title="发现新版本",
-                content=content,
-                parent=self.window,
-                position=InfoBarPosition.TOP,
-                duration=5000,
-            )
 
             # 更新上次检查时间
             self.config.last_update_check_time = self.update_checker.get_current_check_time()
             self.config.save()
+
+            if download_url:
+                # 自动下载更新
+                self.window.settingsPanel.on_update_downloading()
+                InfoBar.info(
+                    title="发现新版本",
+                    content=f"发现新版本 v{version}，正在下载...",
+                    parent=self.window,
+                    position=InfoBarPosition.TOP,
+                    duration=3000,
+                )
+                self._pending_update_url = url
+                self._pending_update_notes = notes
+                self.update_checker.download_and_update(download_url)
+            else:
+                # 无下载地址，弹出手动下载对话框
+                self._show_manual_update_dialog(url, version, notes)
         else:
             InfoBar.info(
                 title="检查更新",
@@ -342,6 +355,51 @@ class Application:
                 position=InfoBarPosition.TOP,
                 duration=2000,
             )
+
+    def _show_manual_update_dialog(self, url: str, version: str, notes: str):
+        """显示手动下载对话框"""
+        dialog = MessageDialog(
+            "发现新版本",
+            f"发现新版本 v{version}\n\n{notes[:200]}{'...' if len(notes) > 200 else ''}",
+            self.window,
+        )
+        dialog.yesButton.setText("前往下载")
+        dialog.cancelButton.setText("取消")
+
+        if dialog.exec():
+            from PySide6.QtCore import QUrl
+            from PySide6.QtGui import QDesktopServices
+
+            QDesktopServices.openUrl(QUrl(url))
+
+    def _on_update_download_progress(self, percent: int):
+        """更新下载进度"""
+        self.window.settingsPanel.on_update_downloading(percent)
+
+    def _on_update_download_finished(self):
+        """更新下载完成，执行替换重启"""
+        self.window.settingsPanel.on_update_finished()
+        InfoBar.success(
+            title="更新完成",
+            content="新版本已下载完成，正在重启...",
+            parent=self.window,
+            position=InfoBarPosition.TOP,
+            duration=2000,
+        )
+
+    def _on_update_download_error(self, error_msg: str):
+        """更新下载失败，弹出手动下载对话框"""
+        self.window.settingsPanel.on_update_finished()
+        url = getattr(self, "_pending_update_url", GITHUB_RELEASES_URL)
+        notes = getattr(self, "_pending_update_notes", "")
+        self._show_manual_update_dialog(url, "最新", notes)
+        InfoBar.warning(
+            title="下载失败",
+            content=f"自动下载失败: {error_msg}，请手动下载",
+            parent=self.window,
+            position=InfoBarPosition.TOP,
+            duration=5000,
+        )
 
     def _on_update_check_error(self, error_msg: str):
         """更新检查失败"""
@@ -409,6 +467,9 @@ class Application:
         """运行应用"""
         logger.info("显示主窗口")
         self.window.show()
+
+        # 启动时清理旧版本残留
+        cleanup_old_exe()
 
         # 启动时自动加载缓存目录树
         self._auto_load_cache()

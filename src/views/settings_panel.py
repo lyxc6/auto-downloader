@@ -1,6 +1,7 @@
 """设置面板"""
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
@@ -23,6 +24,7 @@ from qfluentwidgets.common.config import OptionsConfigItem, OptionsValidator
 
 from .. import __version__
 from ..models import AppConfig
+from ..services.update_checker import GITHUB_RELEASES_URL
 
 
 class SpinBoxSettingCard(SettingCard):
@@ -195,7 +197,14 @@ class SettingsPanel(QWidget):
         update_group = SettingCardGroup("软件更新", self)
 
         # 版本信息卡片
-        self.version_card = SettingCard(FIF.INFO, "当前版本", f"v{__version__}", self)
+        self.version_card = SettingCard(FIF.INFO, "当前版本", parent=self)
+        self.version_value_label = BodyLabel(f"v{__version__}", self.version_card)
+        self.github_btn = PushButton("GitHub", self.version_card)
+        self.github_btn.clicked.connect(self._open_github_releases)
+        self.version_card.hBoxLayout.addWidget(self.version_value_label, 0, Qt.AlignRight)
+        self.version_card.hBoxLayout.addSpacing(8)
+        self.version_card.hBoxLayout.addWidget(self.github_btn, 0, Qt.AlignRight)
+        self.version_card.hBoxLayout.addSpacing(16)
 
         # 更新渠道卡片
         self.channel_config_item = OptionsConfigItem(
@@ -322,3 +331,20 @@ class SettingsPanel(QWidget):
         """更新检查完成（由外部调用）"""
         self.check_btn.setEnabled(True)
         self.check_btn.setText("检查更新")
+
+    def on_update_downloading(self, percent: int = 0):
+        """更新下载中（由外部调用）"""
+        self.check_btn.setEnabled(False)
+        if percent > 0:
+            self.check_btn.setText(f"正在更新... {percent}%")
+        else:
+            self.check_btn.setText("正在更新...")
+
+    def on_update_finished(self):
+        """更新下载完成（由外部调用）"""
+        self.check_btn.setEnabled(True)
+        self.check_btn.setText("检查更新")
+
+    def _open_github_releases(self):
+        """打开 GitHub Releases 页面"""
+        QDesktopServices.openUrl(QUrl(GITHUB_RELEASES_URL))
