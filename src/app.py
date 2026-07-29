@@ -164,6 +164,9 @@ class Application:
 
     def _on_scan_requested(self, url: str):
         """扫描请求处理"""
+        if self.scan_controller.is_scanning:
+            return
+
         self.config.last_url = url
         self.config.save()
 
@@ -178,6 +181,9 @@ class Application:
 
     def _on_refresh_requested(self, url: str):
         """刷新请求处理"""
+        if self.scan_controller.is_scanning:
+            return
+
         # 清除 Widget 内部数据，防止僵尸节点残留
         tw = self.window.downloadPanel.tree_widget
         checked_backup = set(self.cache_manager.checked_items)
