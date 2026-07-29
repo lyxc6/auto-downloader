@@ -25,6 +25,8 @@ class AppConfig:
     scan_delay: float = 0.15  # 扫描间隔（秒）
     scan_mode: str = "dfs"  # "dfs" 深度优先, "bfs" 广度优先
     scan_max_workers: int = 3  # 扫描并发数
+    scan_timeout: float = 0.0  # 无进展超时（秒），0 表示不限时
+    dir_scan_timeout: float = 30.0  # 单个目录扫描超时（秒），0 表示不限时
 
     # 界面设置
     theme: str = "auto"  # "light", "dark", "auto"
