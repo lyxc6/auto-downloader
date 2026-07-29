@@ -46,7 +46,11 @@ class ScanController(QObject):
 
     def _create_service(self) -> ScanService:
         """创建扫描服务"""
-        service = ScanService()
+        service = ScanService(
+            scan_delay=self.config.scan_delay,
+            scan_timeout=self.config.scan_timeout,
+            dir_scan_timeout=self.config.dir_scan_timeout,
+        )
 
         # 设置回调（on_item_found 在 start_scan 中按批次覆盖）
         service.on_error = lambda msg: self.scan_error.emit(msg)
@@ -116,6 +120,9 @@ class ScanController(QObject):
                     if not self.cache_manager.try_add_item(item):
                         return
 
+                    # 更新进展时间（无进展超时）
+                    self._service._update_progress()
+
                     # 发现目录时标记为未完成（扫描完成后会由 on_dir_scanned 标记为已完成）
                     if item.is_dir:
                         self.cache_manager.mark_dir_unscanned(item.full_path)
@@ -146,10 +153,18 @@ class ScanController(QObject):
                             dirs_completed % PROGRESS_DIR_INTERVAL == 0
                             or (now - last_progress_log) >= PROGRESS_LOG_INTERVAL
                         ):
-                            self.log_message.emit(
-                                f"扫描进度: 已完成 {dirs_completed}/{dirs_found} 个目录 | 发现 {file_count} 个文件",
-                                "info",
-                            )
+                            # 提供更详细的进度信息
+                            if dirs_found > 0:
+                                percent = (dirs_completed / dirs_found) * 100
+                                self.log_message.emit(
+                                    f"扫描进度: {dirs_completed}/{dirs_found} 个目录 ({percent:.1f}%) | 发现 {file_count} 个文件",
+                                    "info",
+                                )
+                            else:
+                                self.log_message.emit(
+                                    f"扫描进度: 已完成 {dirs_completed} 个目录 | 发现 {file_count} 个文件",
+                                    "info",
+                                )
                             last_progress_log = now
 
                 # 设置回调
@@ -157,22 +172,13 @@ class ScanController(QObject):
                 self._service.on_dir_scanned = on_dir_scanned
 
                 # 执行扫描
-                if parallel:
-                    # 并行模式
-                    if scan_mode == "bfs":
-                        _ = self._service.scan_directory_bfs_parallel(
-                            url, max_depth=max_depth, max_workers=self.config.scan_max_workers
-                        )
-                    else:
-                        _ = self._service.scan_directory_parallel(
-                            url, max_depth=max_depth, max_workers=self.config.scan_max_workers
-                        )
-                else:
-                    # 串行模式
-                    if scan_mode == "bfs":
-                        _ = self._service.scan_directory_bfs(url, max_depth=max_depth)
-                    else:
-                        _ = self._service.scan_directory(url, max_depth=max_depth)
+                _ = self._service.scan(
+                    url,
+                    scan_mode=scan_mode,
+                    parallel=parallel,
+                    max_depth=max_depth,
+                    max_workers=self.config.scan_max_workers,
+                )
 
                 # flush 剩余 buffer
                 with _cb_lock:
@@ -181,14 +187,22 @@ class ScanController(QObject):
                         self.scan_progress.emit(file_count, dir_count)
                         buffer = []
 
-                # 扫描进度汇总
-                if parallel:
-                    self.log_message.emit(
-                        f"扫描进度: 全部完成 {dirs_completed} 个目录 | 发现 {file_count} 个文件", "success"
-                    )
+                # 检查是否因超时停止
+                if self._service.is_timeout():
+                    self.log_message.emit("扫描超时，已自动停止", "warning")
+                    self.log_message.emit(f"已扫描: 文件 {file_count}, 目录 {dir_count}（已保存）", "info")
+                # 检查是否因取消停止
+                elif self._service.is_cancelled():
+                    self.log_message.emit("扫描已取消", "warning")
+                else:
+                    # 扫描进度汇总
+                    if parallel:
+                        self.log_message.emit(
+                            f"扫描进度: 全部完成 {dirs_completed} 个目录 | 发现 {file_count} 个文件", "success"
+                        )
 
-                # 标记扫描完成状态（仅在未取消时）
-                if not self._service.is_cancelled():
+                # 标记扫描完成状态（仅在正常完成时）
+                if not self._service.is_cancelled() and not self._service.is_timeout():
                     self.cache_manager.set_scan_complete(True)
 
                 # 扫描完成
@@ -200,6 +214,17 @@ class ScanController(QObject):
                 self.log_message.emit("=" * 50, "header")
                 self.log_message.emit("扫描完成！", "success")
                 self.log_message.emit(f"文件: {file_count}, 目录: {dir_count}", "info")
+                # 显示失败统计
+                if self._service._failed_dirs > 0:
+                    self.log_message.emit(
+                        f"注意: {self._service._failed_dirs} 个目录因服务器错误未获取到内容",
+                        "warning",
+                    )
+                if self._service.get_error_dirs_count() > 0:
+                    self.log_message.emit(
+                        f"注意: {self._service.get_error_dirs_count()} 个目录因服务器错误返回空内容",
+                        "warning",
+                    )
                 self.log_message.emit("=" * 50, "header")
 
                 # 内部处理（刷新分支清理等）
@@ -270,13 +295,18 @@ class ScanController(QObject):
                             last_flush = monotonic()
 
                 self._service.on_item_found = on_item_found
-                self._service.on_dir_scanned = lambda dp: (
-                    self.cache_manager.mark_dir_scanned(dp),
-                    self.dir_scanned.emit(dp),
-                )
 
-                self._service.scan_directory(
-                    base_url, dir_path=dir_path, parent_id=parent_id, depth=0, max_depth=self.config.max_depth
+                def on_dir_scanned_single(dp: str):
+                    self.cache_manager.mark_dir_scanned(dp)
+                    self.dir_scanned.emit(dp)
+
+                self._service.on_dir_scanned = on_dir_scanned_single
+
+                self._service.scan(
+                    base_url,
+                    dir_path=dir_path,
+                    parent_id=parent_id,
+                    max_depth=self.config.max_depth,
                 )
 
                 with _cb_lock:
