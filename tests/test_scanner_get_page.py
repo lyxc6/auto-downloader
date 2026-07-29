@@ -31,47 +31,48 @@ def _fake_response(status: int, text: str, raise_http: bool = False) -> MagicMoc
 def svc(monkeypatch):
     s = ScanService()
     # 注入 mock session（绕过懒创建）
-    s._session = MagicMock()
+    mock_session = MagicMock()
+    s._http_client._session = mock_session
     # 跳过重试间的真实 sleep，加速测试
-    monkeypatch.setattr("src.services.scanner.time.sleep", lambda *_: None)
+    monkeypatch.setattr("src.services.http_client.time.sleep", lambda *_: None)
     return s
 
 
 def test_get_page_returns_text_on_200(svc):
-    svc._session.get.return_value = _fake_response(200, "<html>ok</html>")
+    svc._http_client._session.get.return_value = _fake_response(200, "<html>ok</html>")
     assert svc.get_page("http://x") == "<html>ok</html>"
 
 
 def test_get_page_4xx_returns_none_without_retry(svc):
     """4xx 应立即返回 None，只请求一次"""
-    svc._session.get.return_value = _fake_response(404, "<html>404 Not Found</html>", raise_http=True)
+    svc._http_client._session.get.return_value = _fake_response(404, "<html>404 Not Found</html>", raise_http=True)
     result = svc.get_page("http://x", retries=3)
     assert result is None
     # 4xx 不重试：只调用一次
-    assert svc._session.get.call_count == 1
+    assert svc._http_client._session.get.call_count == 1
 
 
 def test_get_page_403_returns_none_without_retry(svc):
-    svc._session.get.return_value = _fake_response(403, "<html>forbidden</html>", raise_http=True)
+    svc._http_client._session.get.return_value = _fake_response(403, "<html>forbidden</html>", raise_http=True)
     assert svc.get_page("http://x", retries=3) is None
-    assert svc._session.get.call_count == 1
+    assert svc._http_client._session.get.call_count == 1
 
 
 def test_get_page_5xx_retries_then_none(svc):
     """5xx 应重试 retries 次，最终返回 None"""
-    svc._session.get.return_value = _fake_response(503, "<html>server error</html>", raise_http=True)
+    svc._http_client._session.get.return_value = _fake_response(503, "<html>server error</html>", raise_http=True)
     result = svc.get_page("http://x", retries=3)
     assert result is None
     # 重试 3 次 + 首次 = 4 次
-    assert svc._session.get.call_count == 4
+    assert svc._http_client._session.get.call_count == 4
 
 
 def test_get_page_network_error_retries_then_none(svc):
     """网络异常应重试后返回 None"""
-    svc._session.get.side_effect = requests.ConnectionError("boom")
+    svc._http_client._session.get.side_effect = requests.ConnectionError("boom")
     result = svc.get_page("http://x", retries=2)
     assert result is None
-    assert svc._session.get.call_count == 3
+    assert svc._http_client._session.get.call_count == 3
 
 
 def test_get_page_cancelled_returns_none(svc):
@@ -80,15 +81,15 @@ def test_get_page_cancelled_returns_none(svc):
     result = svc.get_page("http://x", retries=3)
     assert result is None
     # 取消后不应发起请求
-    assert svc._session.get.call_count == 0
+    assert svc._http_client._session.get.call_count == 0
 
 
 def test_get_page_5xx_then_200_succeeds(svc):
     """5xx 后重试成功应返回文本"""
-    svc._session.get.side_effect = [
+    svc._http_client._session.get.side_effect = [
         _fake_response(500, "err", raise_http=True),
         _fake_response(200, "<html>ok</html>"),
     ]
     result = svc.get_page("http://x", retries=3)
     assert result == "<html>ok</html>"
-    assert svc._session.get.call_count == 2
+    assert svc._http_client._session.get.call_count == 2

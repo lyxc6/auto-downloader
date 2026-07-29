@@ -2,6 +2,8 @@
 
 import pytest
 
+from src.services.html_parser import HtmlParser
+from src.services.page_cache import PageCache
 from src.services.scanner import ScanService
 
 
@@ -9,6 +11,18 @@ from src.services.scanner import ScanService
 def service():
     """创建 ScanService 实例"""
     return ScanService()
+
+
+@pytest.fixture
+def parser():
+    """创建 HtmlParser 实例"""
+    return HtmlParser()
+
+
+@pytest.fixture
+def cache():
+    """创建 PageCache 实例"""
+    return PageCache()
 
 
 class TestPageCache:
@@ -117,18 +131,18 @@ class TestPageCache:
 class TestStructureCache:
     """测试分页结构缓存"""
 
-    def test_cache_key_generation(self, service):
+    def test_cache_key_generation(self, cache):
         """测试缓存 key 生成"""
-        key1 = service._get_dir_cache_key("https://example.com", "folder1")
-        key2 = service._get_dir_cache_key("https://example.com", "folder2")
-        key3 = service._get_dir_cache_key("https://example.com", "folder1")
+        key1 = cache._get_dir_cache_key("https://example.com", "folder1")
+        key2 = cache._get_dir_cache_key("https://example.com", "folder2")
+        key3 = cache._get_dir_cache_key("https://example.com", "folder1")
 
         # 不同目录应生成不同 key
         assert key1 != key2
         # 相同目录应生成相同 key
         assert key1 == key3
 
-    def test_content_hash_generation(self, service):
+    def test_content_hash_generation(self, parser):
         """测试内容哈希生成"""
         html1 = """
         <ul>
@@ -143,8 +157,8 @@ class TestStructureCache:
             <li><a href="?page=3">3</a></li>
         </ul>
         """
-        hash1 = service._get_content_hash(html1)
-        hash2 = service._get_content_hash(html2)
+        hash1 = parser.get_content_hash(html1)
+        hash2 = parser.get_content_hash(html2)
 
         # 不同内容应生成不同哈希
         assert hash1 != hash2
@@ -197,7 +211,7 @@ class TestStructureCache:
 class TestParseTotalPages:
     """测试分页解析"""
 
-    def test_parse_page_links(self, service):
+    def test_parse_page_links(self, parser):
         """测试从分页链接解析"""
         html = """
         <ul>
@@ -206,39 +220,39 @@ class TestParseTotalPages:
             <li><a href="?page=5">5</a></li>
         </ul>
         """
-        result = service._parse_total_pages(html)
+        result = parser.get_total_pages(html)
         assert result == 5
 
-    def test_parse_page_class(self, service):
+    def test_parse_page_class(self, parser):
         """测试从分页容器解析"""
         html = """
         <div class="pagination">
             <span>1 / 3</span>
         </div>
         """
-        result = service._parse_total_pages(html)
+        result = parser.get_total_pages(html)
         assert result == 3
 
-    def test_parse_semantic_text(self, service):
+    def test_parse_semantic_text(self, parser):
         """测试从语义关键词解析"""
         html = """
         <span>当前 1/4</span>
         """
-        result = service._parse_total_pages(html)
+        result = parser.get_total_pages(html)
         assert result == 4
 
-    def test_default_single_page(self, service):
+    def test_default_single_page(self, parser):
         """测试默认单页"""
         html = """
         <ul>
             <li><a href="file1.txt">file1.txt</a></li>
         </ul>
         """
-        result = service._parse_total_pages(html)
+        result = parser.get_total_pages(html)
         assert result == 1
 
-    def test_empty_html(self, service):
+    def test_empty_html(self, parser):
         """测试空 HTML"""
         html = ""
-        result = service._parse_total_pages(html)
+        result = parser.get_total_pages(html)
         assert result == 1

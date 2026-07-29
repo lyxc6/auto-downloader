@@ -228,7 +228,8 @@ class Application:
         self.window.downloadPanel.download_btn.setEnabled(False)
         self._start_auto_save()
 
-        self.scan_controller.start_directory_refresh(base_url, item_id, item.full_path, item.parent_id)
+        parallel = self.config.scan_max_workers > 1
+        self.scan_controller.start_directory_refresh(base_url, item_id, item.full_path, item.parent_id, self.config.scan_mode, parallel=parallel)
 
     def _on_cache_load_completed(self, tree_data: dict, checked_items: set):
         """缓存加载完成：更新视图层"""

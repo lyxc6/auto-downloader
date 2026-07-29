@@ -90,7 +90,7 @@ class TestDirTimeoutIntegration:
             """
 
             # 设置目录级超时很短
-            service._dir_scan_timeout = 0.1
+            service._http_client._dir_scan_timeout = 0.1
             service._start_dir_timer()
 
             # 等待超过目录级超时
@@ -114,7 +114,7 @@ class TestDirTimeoutIntegration:
             """
 
             # 设置目录级超时很短
-            service._dir_scan_timeout = 0.1
+            service._http_client._dir_scan_timeout = 0.1
             service._start_dir_timer()
 
             # 等待超过目录级超时
@@ -143,7 +143,7 @@ class TestDirTimeoutIntegration:
             """
 
             # 设置目录级超时很短
-            service._dir_scan_timeout = 0.1
+            service._http_client._dir_scan_timeout = 0.1
             service._start_dir_timer()
 
             # 等待超过目录级超时
@@ -201,7 +201,7 @@ class TestDirTimeoutLogging:
         """测试目录级超时时记录警告日志"""
         with patch('src.services.scanner.logger'):
             # 设置目录级超时很短
-            service._dir_scan_timeout = 0.1
+            service._http_client._dir_scan_timeout = 0.1
             service._start_dir_timer()
 
             # 等待超过超时时间

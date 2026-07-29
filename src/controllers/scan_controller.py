@@ -246,13 +246,15 @@ class ScanController(QObject):
         self._thread = threading.Thread(target=_scan_worker, daemon=True)
         self._thread.start()
 
-    def start_directory_scan(self, base_url: str, dir_path: str, parent_id: str):
+    def start_directory_scan(self, base_url: str, dir_path: str, parent_id: str, scan_mode: str = "dfs", parallel: bool = False):
         """扫描单个目录（不递归到根，只扫描指定目录及其子目录）
 
         Args:
             base_url: 根 URL（如 https://example.com/index.php/224.html）
             dir_path: 要扫描的目录路径（如 写真）
             parent_id: 该目录的父 item_id
+            scan_mode: 扫描模式 "dfs" 深度优先 / "bfs" 广度优先
+            parallel: 是否启用并行扫描
         """
         with self._lock:
             if self._is_scanning:
@@ -302,8 +304,11 @@ class ScanController(QObject):
 
                 self._service.on_dir_scanned = on_dir_scanned_single
 
+                self._service.parallel_mode = parallel
                 self._service.scan(
                     base_url,
+                    scan_mode=scan_mode,
+                    parallel=parallel,
                     dir_path=dir_path,
                     parent_id=parent_id,
                     max_depth=self.config.max_depth,
@@ -413,7 +418,7 @@ class ScanController(QObject):
 
         self.start_scan(url, scan_mode=scan_mode, parallel=parallel)
 
-    def start_directory_refresh(self, base_url: str, item_id: str, item_full_path: str, item_parent_id: str):
+    def start_directory_refresh(self, base_url: str, item_id: str, item_full_path: str, item_parent_id: str, scan_mode: str = "dfs", parallel: bool = False):
         """刷新单个目录（清除其子项，重新扫描该目录）"""
         if not base_url:
             self.log_message.emit("无有效URL，请先执行一次扫描", "error")
@@ -429,7 +434,7 @@ class ScanController(QObject):
         self.cache_manager.mark_dir_unscanned(item_full_path)
 
         # 开始单目录扫描
-        self.start_directory_scan(base_url, item_full_path, item_parent_id)
+        self.start_directory_scan(base_url, item_full_path, item_parent_id, scan_mode=scan_mode, parallel=parallel)
 
     def _on_scan_completed_internal(self, file_count: int, dir_count: int):
         """扫描完成处理"""

@@ -26,14 +26,20 @@ from src.services.scanner import ScanService
 def test_close_acquires_lock(make):
     """close() 应获取 self._lock，与持锁者互斥"""
     svc = make()
-    svc._session = MagicMock()  # 使 close 有事可做
+    # 对于ScanService，_lock在_http_client中
+    if isinstance(svc, ScanService):
+        svc._http_client._session = MagicMock()  # 使 close 有事可做
+        lock = svc._http_client._lock
+    else:
+        svc._session = MagicMock()  # 使 close 有事可做
+        lock = svc._lock
     done = threading.Event()
 
     def call_close():
         svc.close()
         done.set()
 
-    with svc._lock:  # 主线程持锁
+    with lock:  # 主线程持锁
         t = threading.Thread(target=call_close)
         t.start()
         completed = done.wait(timeout=0.2)
@@ -46,14 +52,20 @@ def test_close_acquires_lock(make):
 def test_session_property_acquires_lock(make):
     """session 属性应获取 self._lock，避免与 close 竞态造成泄漏/撕裂"""
     svc = make()
-    svc._session = None  # 触发懒创建分支
+    # 对于ScanService，_lock在_http_client中
+    if isinstance(svc, ScanService):
+        svc._http_client._session = None  # 触发懒创建分支
+        lock = svc._http_client._lock
+    else:
+        svc._session = None  # 触发懒创建分支
+        lock = svc._lock
     done = threading.Event()
 
     def get_sess():
         _ = svc.session
         done.set()
 
-    with svc._lock:
+    with lock:
         t = threading.Thread(target=get_sess)
         t.start()
         completed = done.wait(timeout=0.2)
@@ -66,7 +78,11 @@ def test_session_property_acquires_lock(make):
 def test_close_idempotent_concurrent(make):
     """并发多次 close 不产生异常"""
     svc = make()
-    svc._session = MagicMock()
+    # 对于ScanService，_session在_http_client中
+    if isinstance(svc, ScanService):
+        svc._http_client._session = MagicMock()
+    else:
+        svc._session = MagicMock()
     errors = []
 
     def closer():
@@ -82,7 +98,10 @@ def test_close_idempotent_concurrent(make):
     for t in threads:
         t.join(timeout=5)
     assert not errors, f"并发 close 异常: {errors}"
-    assert svc._session is None
+    if isinstance(svc, ScanService):
+        assert svc._http_client._session is None
+    else:
+        assert svc._session is None
 
 
 # ----------------------------- 控制器层 close_service -----------------------------
