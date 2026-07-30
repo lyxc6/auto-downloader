@@ -374,3 +374,95 @@ class TestParseItemsFileFormats:
         assert items[1] == ("file", "image.png", "photos/image.png")
         assert items[2] == ("file", "anim.gif", "photos/anim.gif")
         assert items[3] == ("file", "vector.svg", "photos/vector.svg")
+
+
+class TestParseItemsDataUrl:
+    """测试 data-url / data-filename 格式（新版服务器格式）"""
+
+    def test_data_url_with_hash_href(self, service):
+        """测试 href="#" + data-url 格式的文件"""
+        html = """
+        <div id="webdav-list">
+            <li style="margin:8px 0;">
+                <a class="webdav-video-link"
+                   data-filename="%5B%E8%8C%B9%E4%BC%8A%E6%98%A0%E7%94%BB-Ryyh.net%5D%23%E6%B1%9F%E5%8D%97%E7%AC%AC%E4%B8%80%E6%B7%B1%E6%83%85_Video.0265.MOV"
+                   data-url="/webdav/%E7%A6%8F%E5%88%A9/test/%5B%E8%8C%B9%E4%BC%8A%E6%98%A0%E7%94%BB-Ryyh.net%5D%23%E6%B1%9F%E5%8D%97%E7%AC%AC%E4%B8%80%E6%B7%B1%E6%83%85_Video.0265.MOV"
+                   href="#">? [茹伊映画-Ryyh.net]#江南第一深情_Video.0265.MOV</a>
+            </li>
+        </div>
+        """
+        items = service.parse_items(html)
+        assert len(items) == 1
+        assert items[0][0] == "file"
+        # 文件名应从 data-filename 解码，而不是从文本内容获取
+        assert items[0][1] == "[茹伊映画-Ryyh.net]#江南第一深情_Video.0265.MOV"
+        # href 应使用 data-url
+        assert items[0][2] == "/webdav/%E7%A6%8F%E5%88%A9/test/%5B%E8%8C%B9%E4%BC%8A%E6%98%A0%E7%94%BB-Ryyh.net%5D%23%E6%B1%9F%E5%8D%97%E7%AC%AC%E4%B8%80%E6%B7%B1%E6%83%85_Video.0265.MOV"
+
+    def test_data_url_multiple_files(self, service):
+        """测试多个 data-url 格式的文件"""
+        html = """
+        <div id="webdav-list">
+            <li style="margin:8px 0;">
+                <a class="webdav-video-link"
+                   data-filename="video1.MOV"
+                   data-url="/webdav/video1.MOV"
+                   href="#">? video1.MOV</a>
+            </li>
+            <li style="margin:8px 0;">
+                <a class="webdav-video-link"
+                   data-filename="video2.MOV"
+                   data-url="/webdav/video2.MOV"
+                   href="#">? video2.MOV</a>
+            </li>
+        </div>
+        """
+        items = service.parse_items(html)
+        assert len(items) == 2
+        assert items[0] == ("file", "video1.MOV", "/webdav/video1.MOV")
+        assert items[1] == ("file", "video2.MOV", "/webdav/video2.MOV")
+
+    def test_data_url_with_normal_href(self, service):
+        """测试同时有 data-url 和正常 href 时，使用原始 href"""
+        html = """
+        <div id="webdav-list">
+            <li style="margin:8px 0;">
+                <a href="old_url.txt"
+                   data-url="/webdav/new_url.txt"
+                   data-filename="new_url.txt">file.txt</a>
+            </li>
+        </div>
+        """
+        items = service.parse_items(html)
+        assert len(items) == 1
+        # 当 href 有真实值时，使用原始 href
+        assert items[0] == ("file", "new_url.txt", "old_url.txt")
+
+    def test_data_url_empty_href_treated_as_file(self, service):
+        """测试空 href + data-url 格式"""
+        html = """
+        <div id="webdav-list">
+            <li style="margin:8px 0;">
+                <a href=""
+                   data-url="/webdav/file.txt"
+                   data-filename="file.txt">file.txt</a>
+            </li>
+        </div>
+        """
+        items = service.parse_items(html)
+        assert len(items) == 1
+        assert items[0] == ("file", "file.txt", "/webdav/file.txt")
+
+    def test_data_url_dir_detection(self, service):
+        """测试 data-url 格式的目录"""
+        html = """
+        <div id="webdav-list">
+            <li style="margin:8px 0;">
+                <a href="#"
+                   data-url="?dir=subfolder">subfolder</a>
+            </li>
+        </div>
+        """
+        items = service.parse_items(html)
+        assert len(items) == 1
+        assert items[0] == ("dir", "subfolder", "?dir=subfolder")

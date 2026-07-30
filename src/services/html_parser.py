@@ -19,6 +19,8 @@ class HtmlParser:
         Returns:
             List of (type, name, href)
         """
+        from urllib.parse import unquote
+
         items: list[tuple[str, str, str]] = []
 
         # 检测服务端错误页面
@@ -46,6 +48,16 @@ class HtmlParser:
             # 去除开头的 Emoji 字符（📁、📄 等）
             text = re.sub(r'^[\U0001F4C0-\U0001F4FF\u2600-\u26FF\u2700-\u27BF]+\s*', '', text)
 
+            # 优先使用 data-url 属性（新版服务器格式：href="#" + data-url="..."）
+            data_url = str(a.get("data-url", ""))
+            if data_url and (not href or href == "#"):
+                href = data_url
+
+            # 优先使用 data-filename 属性（URL编码的正确文件名）
+            data_filename = str(a.get("data-filename", ""))
+            if data_filename:
+                text = unquote(data_filename)
+
             if not href or href == "#":
                 continue
             if "返回上级" in text:
@@ -65,6 +77,8 @@ class HtmlParser:
         Returns:
             List of (type, name, href)
         """
+        from urllib.parse import unquote
+
         soup = BeautifulSoup(html, "html.parser")
         items: list[tuple[str, str, str]] = []
 
@@ -92,6 +106,16 @@ class HtmlParser:
             text = a.get_text(strip=True)
             # 去除开头的 Emoji 字符（📁、📄 等）
             text = re.sub(r'^[\U0001F4C0-\U0001F4FF\u2600-\u26FF\u2700-\u27BF]+\s*', '', text)
+
+            # 优先使用 data-url 属性（新版服务器格式：href="#" + data-url="..."）
+            data_url = str(a.get("data-url", ""))
+            if data_url and (not href or href == "#"):
+                href = data_url
+
+            # 优先使用 data-filename 属性（URL编码的正确文件名）
+            data_filename = str(a.get("data-filename", ""))
+            if data_filename:
+                text = unquote(data_filename)
 
             if not href or href == "#":
                 continue
