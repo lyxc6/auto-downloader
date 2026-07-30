@@ -2,7 +2,7 @@
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QHBoxLayout, QTableWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QMessageBox, QTableWidgetItem, QVBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
     CardWidget,
@@ -128,7 +128,7 @@ class QueuePanel(QWidget):
             return
         info = self._items[item_id]
         if total > 0:
-            percent = int(downloaded / total * 100)
+            percent = min(100, int(downloaded / total * 100))
             info["progress_bar"].setValue(percent)
             info["pct_item"].setText(f"{percent}%")
 
@@ -164,10 +164,18 @@ class QueuePanel(QWidget):
 
     def clear(self):
         """清空列表"""
-        self.table_widget.setRowCount(0)
-        self._items.clear()
-        self._stats = {"pending": 0, "completed": 0, "failed": 0, "skipped": 0, "downloading": 0}
-        self._update_stats_labels()
+        reply = QMessageBox.question(
+            self,
+            "确认清空",
+            "确定要清空下载队列吗？正在下载的任务将失去可见性。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.table_widget.setRowCount(0)
+            self._items.clear()
+            self._stats = {"pending": 0, "completed": 0, "failed": 0, "skipped": 0, "downloading": 0}
+            self._update_stats_labels()
 
     def _update_stats_labels(self):
         """更新统计标签"""

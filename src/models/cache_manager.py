@@ -144,6 +144,11 @@ class CacheManager:
         with self._lock:
             self.scanned_dirs = set(backup)
 
+    def clear_scanned_dirs(self):
+        """清空已扫描目录（线程安全）"""
+        with self._lock:
+            self.scanned_dirs.clear()
+
     def cleanup_checked(self):
         """剔除 checked_items 中已不在 tree_data 里的失效 id"""
         with self._lock:

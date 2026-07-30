@@ -212,7 +212,8 @@ class DownloadPanel(QWidget):
     def update_progress(self, current: int, total: int):
         """更新进度"""
         if total > 0:
-            self.progress_bar.setValue(int(current / total * 100))
+            percent = min(100, int(current / total * 100))
+            self.progress_bar.setValue(percent)
 
     def add_log(self, message: str, level: str = "info"):
         """添加日志"""

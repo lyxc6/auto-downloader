@@ -342,10 +342,11 @@ class ScanController(QObject):
 
     def cancel_scan(self):
         """取消扫描"""
-        if self._service:
-            self._service.cancel()
-            logger.warning("用户取消扫描")
-            self.log_message.emit("正在取消扫描...", "warning")
+        with self._lock:
+            if self._service is not None:
+                self._service.cancel()
+        logger.warning("用户取消扫描")
+        self.log_message.emit("正在取消扫描...", "warning")
 
     def close_service(self):
         """关闭扫描服务（线程安全，可在应用关闭时调用）"""
@@ -353,6 +354,10 @@ class ScanController(QObject):
             if self._service is not None:
                 self._service.close()
                 self._service = None
+        # 等待工作线程结束
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=5)
+            self._thread = None
 
     def start_scan_with_cache(self, url: str, scan_mode: str = "dfs", parallel: bool = False):
         """智能扫描：自动处理缓存逻辑
@@ -411,8 +416,7 @@ class ScanController(QObject):
 
         # 备份 scanned_dirs，手动清空以强制重新扫描所有目录
         self._refresh_scanned_backup = self.cache_manager.save_scanned_dirs_backup()
-        with self.cache_manager._lock:
-            self.cache_manager.scanned_dirs.clear()
+        self.cache_manager.clear_scanned_dirs()
         self.cache_manager.clear_tree_data_only()
         self.cache_manager.set_url(url)
 

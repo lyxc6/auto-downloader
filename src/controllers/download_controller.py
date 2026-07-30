@@ -121,10 +121,11 @@ class DownloadController(QObject):
 
     def cancel_download(self):
         """取消下载"""
-        if self._service:
-            self._service.cancel()
-            logger.warning("用户取消下载")
-            self.log_message.emit("正在取消下载...", "warning")
+        with self._lock:
+            if self._service is not None:
+                self._service.cancel()
+        logger.warning("用户取消下载")
+        self.log_message.emit("正在取消下载...", "warning")
 
     def close_service(self):
         """关闭下载服务（线程安全，可在应用关闭时调用）"""
@@ -132,15 +133,21 @@ class DownloadController(QObject):
             if self._service is not None:
                 self._service.close()
                 self._service = None
+        # 等待工作线程结束
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=5)
+            self._thread = None
 
     def pause_download(self):
         """暂停下载"""
-        if self._service:
-            self._service.pause()
-            self.log_message.emit("下载已暂停", "warning")
+        with self._lock:
+            if self._service is not None:
+                self._service.pause()
+        self.log_message.emit("下载已暂停", "warning")
 
     def resume_download(self):
         """恢复下载"""
-        if self._service:
-            self._service.resume()
-            self.log_message.emit("下载已恢复", "info")
+        with self._lock:
+            if self._service is not None:
+                self._service.resume()
+        self.log_message.emit("下载已恢复", "info")

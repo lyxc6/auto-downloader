@@ -36,8 +36,11 @@ class PageCache:
         Returns:
             (total_pages, is_cache_hit)
         """
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "html.parser")
+
         cache_key = self._get_dir_cache_key(base_url, dir_path)
-        content_hash = self._parser.get_content_hash(html)
+        content_hash = self._parser.get_content_hash_from_soup(soup)
 
         with self._structure_cache_lock:
             if cache_key in self._structure_cache:
@@ -49,7 +52,7 @@ class PageCache:
                     del self._structure_cache[cache_key]
 
         # 解析总页数
-        total = self._parser.get_total_pages(html)
+        total = self._parser.get_total_pages_from_soup(soup)
 
         # 缓存结果
         with self._structure_cache_lock:
@@ -71,13 +74,16 @@ class PageCache:
         4. 含分页语义关键词（当前/第 ... 页）的 ``N/M`` 文本
         5. 默认 1
         """
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "html.parser")
+
         # 检查缓存
         if dir_path:
             with self._page_cache_lock:
                 if dir_path in self._page_cache:
                     cached = self._page_cache[dir_path]
-                    # 验证缓存是否仍然有效
-                    actual = self._parser.get_total_pages(html)
+                    # 验证缓存是否仍然有效（在锁外解析）
+                    actual = self._parser.get_total_pages_from_soup(soup)
                     if actual != cached:
                         logger.warning(
                             "分页缓存不匹配: dir=%s, cached=%d, actual=%d",
@@ -89,7 +95,7 @@ class PageCache:
                     return cached
 
         # 解析总页数
-        total = self._parser.get_total_pages(html)
+        total = self._parser.get_total_pages_from_soup(soup)
 
         # 缓存结果
         if dir_path:

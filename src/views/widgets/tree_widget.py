@@ -231,17 +231,6 @@ class DownloadTreeWidget(TreeWidget):
                 self._sort_children_of(pid)
             self._updating = False
 
-    def toggle_check(self, item_id: str):
-        """切换选中状态"""
-        tw = self._items.get(item_id)
-        if tw is None:
-            return
-        is_checked = tw.checkState(0) == Qt.CheckState.Checked
-        tw.setCheckState(
-            0,
-            Qt.CheckState.Unchecked if is_checked else Qt.CheckState.Checked,
-        )
-
     def is_checked(self, item_id: str) -> bool:
         """是否选中"""
         tw = self._items.get(item_id)

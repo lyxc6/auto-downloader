@@ -188,7 +188,7 @@ class Application:
         tw = self.window.downloadPanel.tree_widget
         checked_backup = set(self.cache_manager.checked_items)
         tw.clear_all()
-        tw._checked_set = checked_backup  # 恢复已选集，新到达节点能正确显示勾选状态
+        tw.apply_checked_items(checked_backup)  # 恢复已选集，新到达节点能正确显示勾选状态
 
         self.config.last_url = url
         self.config.save()
@@ -266,7 +266,16 @@ class Application:
 
     def _on_scan_error(self, error_msg: str):
         """扫描失败"""
+        self.window.downloadPanel.set_scanning(False)
         self._stop_auto_save_if_idle()
+        InfoBar.warning(
+            title="扫描失败",
+            content=error_msg,
+            orient=InfoBarPosition.TOP_RIGHT,
+            isClosable=True,
+            duration=5000,
+            parent=self.window,
+        )
 
     # ==================== 下载相关回调 ====================
 

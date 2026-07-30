@@ -30,6 +30,7 @@ class HttpClient:
         self._dir_scan_timeout = dir_scan_timeout
         self._last_progress_time: float = time.monotonic()
         self._dir_start_time: float = 0.0
+        self._progress_lock = threading.Lock()
 
         # 失败统计
         self._failed_dirs = 0
@@ -73,23 +74,27 @@ class HttpClient:
         """是否已超时（无进展超时）"""
         if self._scan_timeout <= 0:
             return False
-        return (time.monotonic() - self._last_progress_time) >= self._scan_timeout
+        with self._progress_lock:
+            return (time.monotonic() - self._last_progress_time) >= self._scan_timeout
 
     def _update_progress(self):
         """更新进展时间（发现新内容时调用）"""
-        self._last_progress_time = time.monotonic()
+        with self._progress_lock:
+            self._last_progress_time = time.monotonic()
 
     def _is_dir_timeout(self) -> bool:
         """检查当前目录是否超时"""
         if self._dir_scan_timeout <= 0:
             return False
-        if self._dir_start_time <= 0:
-            return False
-        return (time.monotonic() - self._dir_start_time) >= self._dir_scan_timeout
+        with self._progress_lock:
+            if self._dir_start_time <= 0:
+                return False
+            return (time.monotonic() - self._dir_start_time) >= self._dir_scan_timeout
 
     def _start_dir_timer(self):
         """启动目录级计时器"""
-        self._dir_start_time = time.monotonic()
+        with self._progress_lock:
+            self._dir_start_time = time.monotonic()
 
     def _increment_error_dirs(self):
         """增加错误目录计数器"""

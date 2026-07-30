@@ -80,6 +80,7 @@ class DownloadService:
             resp = self.session.head(url, timeout=self.timeout, allow_redirects=True)
             # 部分服务器不支持 HEAD，回退到 GET
             if resp.status_code in (405, 501):
+                resp.close()  # 关闭 HEAD 响应
                 resp = self.session.get(url, stream=True, timeout=self.timeout)
                 resp.raise_for_status()
                 cl = resp.headers.get("content-length")
@@ -89,9 +90,22 @@ class DownloadService:
             resp.raise_for_status()
             cl = resp.headers.get("content-length")
             ar = resp.headers.get("accept-ranges")
+            resp.close()  # 关闭 HEAD 响应
             return (int(cl) if cl else None, ar)
+        except requests.exceptions.ConnectionError as e:
+            logger.warning("连接失败: %s -> %s", url, e)
+            return (None, None)
+        except requests.exceptions.Timeout as e:
+            logger.warning("请求超时: %s -> %s", url, e)
+            return (None, None)
+        except requests.exceptions.RequestException as e:
+            logger.warning("请求失败: %s -> %s", url, e)
+            return (None, None)
+        except (ValueError, TypeError) as e:
+            logger.error("解析远端文件信息失败: %s -> %s", url, e)
+            return (None, None)
         except Exception as e:
-            logger.debug("获取远端文件信息失败: %s -> %s", url, e)
+            logger.error("获取远端文件信息失败: %s -> %s", url, e)
             return (None, None)
 
     def download_file(self, item: DownloadItem, download_dir: str) -> bool:
@@ -156,6 +170,7 @@ class DownloadService:
             if resume_from > 0 and os.path.exists(local_path):
                 resume_from = os.path.getsize(local_path)
 
+            resp = None
             try:
                 headers: dict[str, str] = {}
                 mode = "wb"
@@ -229,6 +244,9 @@ class DownloadService:
                 if self.on_error:
                     self.on_error(item_id, str(e))
                 return False
+            finally:
+                if resp is not None:
+                    resp.close()
 
         return False
 

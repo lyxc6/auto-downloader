@@ -62,8 +62,11 @@ class AppConfig:
     def save(self):
         """保存配置"""
         try:
-            with open(self.config_file, "w", encoding="utf-8") as f:
+            # 写入临时文件，然后原子替换，防止崩溃时损坏配置文件
+            temp_file = self.config_file + ".tmp"
+            with open(temp_file, "w", encoding="utf-8") as f:
                 json.dump(asdict(self), f, ensure_ascii=False, indent=2)
+            os.replace(temp_file, self.config_file)
         except Exception:
             logger.error("保存配置失败", exc_info=True)
 
@@ -77,7 +80,22 @@ class AppConfig:
                     data = json.load(f)
                     for key, value in data.items():
                         if hasattr(config, key):
-                            setattr(config, key, value)
+                            current_value = getattr(config, key)
+                            field_type = type(current_value)
+                            # 尝试类型转换
+                            try:
+                                if field_type is bool and isinstance(value, str):
+                                    value = value.lower() in ("true", "1", "yes")
+                                elif field_type is int and isinstance(value, (int, float)):
+                                    value = int(value)
+                                elif field_type is float and isinstance(value, (int, float)):
+                                    value = float(value)
+                                setattr(config, key, value)
+                            except (ValueError, TypeError):
+                                logger.warning(
+                                    "配置项 %s 类型错误: 期望 %s, 得到 %s",
+                                    key, field_type.__name__, type(value).__name__
+                                )
         except Exception:
             logger.error("加载配置失败", exc_info=True)
         return config

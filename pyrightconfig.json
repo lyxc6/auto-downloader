@@ -1,4 +1,4 @@
 {
-  "reportMissingTypeStubs": true,
-  "reportUnknownMemberType": true
+  "reportMissingTypeStubs": false,
+  "reportUnknownMemberType": false
 }

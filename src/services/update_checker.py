@@ -184,22 +184,25 @@ class UpdateDownloadWorker(QThread):
 
             logger.info("开始下载更新: %s", self.download_url)
             response = requests.get(self.download_url, stream=True, timeout=30)
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
 
-            total_size = int(response.headers.get("content-length", 0))
-            downloaded = 0
+                total_size = int(response.headers.get("content-length", 0))
+                downloaded = 0
 
-            with open(temp_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if total_size > 0:
-                            percent = int(downloaded * 100 / total_size)
-                            self.progress.emit(percent)
+                with open(temp_path, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total_size > 0:
+                                percent = int(downloaded * 100 / total_size)
+                                self.progress.emit(percent)
 
-            logger.info("下载完成: %s (%d bytes)", temp_path, downloaded)
-            self.finished.emit(str(temp_path))
+                logger.info("下载完成: %s (%d bytes)", temp_path, downloaded)
+                self.finished.emit(str(temp_path))
+            finally:
+                response.close()
 
         except requests.RequestException as e:
             logger.error("下载更新失败: %s", e)
