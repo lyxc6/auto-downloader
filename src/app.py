@@ -103,6 +103,10 @@ class Application:
         # 缓存相关信号
         self.scan_controller.cache_load_completed.connect(self._on_cache_load_completed)
 
+        # 文件大小预取信号
+        self.scan_controller.size_prefetch_progress.connect(self._on_size_prefetch_progress)
+        self.scan_controller.size_prefetch_completed.connect(self._on_size_prefetch_completed)
+
         self.download_controller.log_message.connect(download_panel.add_log)
         self.download_controller.progress_updated.connect(self._on_download_progress)
         self.download_controller.status_changed.connect(self._on_download_status)
@@ -264,6 +268,10 @@ class Application:
         # 刷新目录扫描状态
         self.window.downloadPanel.tree_widget.apply_scan_status(self.cache_manager.get_unscanned_dirs())
 
+        # 扫描完成后启动文件大小预取（并行HEAD请求）
+        if file_count > 0:
+            self.scan_controller.start_size_prefetch(max_workers=self.config.scan_max_workers)
+
     def _on_scan_error(self, error_msg: str):
         """扫描失败"""
         self.window.downloadPanel.set_scanning(False)
@@ -276,6 +284,16 @@ class Application:
             duration=5000,
             parent=self.window,
         )
+
+    def _on_size_prefetch_progress(self, item_id: str, size: int):
+        """文件大小预取进度：更新单个节点的大小显示"""
+        self.window.downloadPanel.tree_widget.update_item_size(item_id)
+
+    def _on_size_prefetch_completed(self):
+        """文件大小预取完成"""
+        self._stop_auto_save_if_idle()
+        stats = self.cache_manager.get_stats()
+        self.window.downloadPanel.update_stats(stats["total_files"], stats["total_dirs"], stats["checked_count"])
 
     # ==================== 下载相关回调 ====================
 
@@ -459,6 +477,7 @@ class Application:
         """应用关闭前保存"""
         logger.info("窗口关闭，保存缓存...")
         self.cache_manager.save()
+        self.scan_controller.cancel_size_prefetch()
         self.scan_controller.cancel_scan()
         self.download_controller.cancel_download()
         self.scan_controller.close_service()

@@ -233,6 +233,32 @@ class HttpClient:
 
         return None
 
+    def head_file_size(self, url: str, retries: int = 2) -> int | None:
+        """发送 HEAD 请求获取文件大小（Content-Length）
+
+        Args:
+            url: 文件URL
+            retries: 最大重试次数
+
+        Returns:
+            文件大小（字节），失败返回 None
+        """
+        session = self.session
+        for attempt in range(retries):
+            try:
+                resp = session.head(url, timeout=30, allow_redirects=True)
+                if resp.status_code in (405, 501):
+                    resp.close()
+                    return None
+                resp.raise_for_status()
+                cl = resp.headers.get("content-length")
+                resp.close()
+                return int(cl) if cl else None
+            except requests.RequestException:
+                if attempt < retries - 1:
+                    time.sleep(1)
+        return None
+
     def close(self):
         """关闭session（原子，可重复调用）"""
         with self._lock:

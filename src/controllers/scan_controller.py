@@ -2,12 +2,14 @@
 
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from time import monotonic
 
 from PySide6.QtCore import QObject, Signal
 
 from ..models import AppConfig, CacheManager, DownloadItem
 from ..services import ScanService
+from ..services.http_client import HttpClient
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +28,10 @@ class ScanController(QObject):
     # 缓存相关信号
     cache_load_completed = Signal(dict, set)  # tree_data, checked_items（缓存加载完成）
 
+    # 文件大小预取信号
+    size_prefetch_progress = Signal(str, int)  # item_id, size（每完成一个文件）
+    size_prefetch_completed = Signal()  # 全部完成
+
     def __init__(self, config: AppConfig, cache_manager: CacheManager, parent: QObject | None = None):
         super().__init__(parent)
         self.config = config
@@ -37,6 +43,10 @@ class ScanController(QObject):
 
         # 刷新状态（scanned_dirs 备份，用于错误恢复）
         self._refresh_scanned_backup: set[str] | None = None
+
+        # 文件大小预取状态
+        self._prefetch_cancel_flag = threading.Event()
+        self._prefetch_thread: threading.Thread | None = None
 
     @property
     def is_scanning(self) -> bool:
@@ -358,6 +368,68 @@ class ScanController(QObject):
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=5)
             self._thread = None
+
+    def start_size_prefetch(self, max_workers: int = 5):
+        """扫描完成后，并行发送 HEAD 请求预取文件大小
+
+        Args:
+            max_workers: 并行线程数
+        """
+        # 收集所有需要预取大小的文件
+        files_to_prefetch = [
+            item for item in self.cache_manager.get_all_items()
+            if item.is_file and item.size <= 0 and item.url
+        ]
+
+        if not files_to_prefetch:
+            return
+
+        self._prefetch_cancel_flag.clear()
+        total = len(files_to_prefetch)
+        self.log_message.emit(f"正在获取文件大小... (0/{total})", "info")
+
+        def _prefetch_worker():
+            completed = 0
+            http_client = HttpClient()
+            try:
+                def head_one(item: DownloadItem) -> tuple[str, int | None]:
+                    if self._prefetch_cancel_flag.is_set():
+                        return (item.item_id, None)
+                    size = http_client.head_file_size(item.url, retries=1)
+                    return (item.item_id, size)
+
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {
+                        executor.submit(head_one, item): item
+                        for item in files_to_prefetch
+                    }
+                    for future in as_completed(futures):
+                        if self._prefetch_cancel_flag.is_set():
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            break
+                        item_id, size = future.result()
+                        completed += 1
+                        if size is not None and size > 0:
+                            self.cache_manager.update_item_size(item_id, size)
+                            self.size_prefetch_progress.emit(item_id, size)
+                        if completed % 20 == 0 or completed == total:
+                            self.log_message.emit(
+                                f"正在获取文件大小... ({completed}/{total})", "info"
+                            )
+            except Exception as e:
+                logger.error("文件大小预取失败", exc_info=True)
+                self.log_message.emit(f"文件大小预取失败: {e}", "error")
+            finally:
+                http_client.close()
+                self.cache_manager.save()
+                self.size_prefetch_completed.emit()
+
+        self._prefetch_thread = threading.Thread(target=_prefetch_worker, daemon=True)
+        self._prefetch_thread.start()
+
+    def cancel_size_prefetch(self):
+        """取消文件大小预取"""
+        self._prefetch_cancel_flag.set()
 
     def start_scan_with_cache(self, url: str, scan_mode: str = "dfs", parallel: bool = False):
         """智能扫描：自动处理缓存逻辑

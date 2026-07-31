@@ -287,6 +287,19 @@ class CacheManager:
         with self._lock:
             return self.tree_data.get(item_id)
 
+    def update_item_size(self, item_id: str, size: int) -> bool:
+        """更新项目文件大小（线程安全）
+
+        Returns:
+            True 表示更新成功，False 表示项目不存在
+        """
+        with self._lock:
+            item = self.tree_data.get(item_id)
+            if item is not None:
+                item.size = size
+                return True
+            return False
+
     def toggle_check(self, item_id: str) -> bool:
         """切换选中状态"""
         with self._lock:

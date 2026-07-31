@@ -407,6 +407,18 @@ class DownloadTreeWidget(TreeWidget):
         """标记节点为已加载（子节点已填充或即将在扫描中增量填充）"""
         self._loaded.add(item_id)
 
+    def update_item_size(self, item_id: str) -> None:
+        """更新单个文件节点的大小显示"""
+        tw = self._items.get(item_id)
+        if tw is not None:
+            item = self._all_items.get(item_id)
+            if item is not None and item.is_file:
+                self._updating = True
+                try:
+                    tw.setText(2, format_size(item.size))
+                finally:
+                    self._updating = False
+
     def clear_all(self):
         """清空所有"""
         self.clear()
