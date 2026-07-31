@@ -375,6 +375,12 @@ class ScanController(QObject):
         Args:
             max_workers: 并行线程数
         """
+        # 防重复：如果已有 prefetch 在运行，先取消它
+        if self._prefetch_thread and self._prefetch_thread.is_alive():
+            logger.info("取消正在运行的文件大小预取任务")
+            self.cancel_size_prefetch()
+            self._prefetch_thread.join(timeout=2)
+
         # 收集所有需要预取大小的文件
         files_to_prefetch = [
             item for item in self.cache_manager.get_all_items()
