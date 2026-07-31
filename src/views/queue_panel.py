@@ -2,11 +2,12 @@
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QHBoxLayout, QMessageBox, QTableWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QTableWidgetItem, QVBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
     CardWidget,
     FluentSystemColor,
+    MessageDialog,
     ProgressBar,
     StrongBodyLabel,
     TableWidget,
@@ -164,14 +165,15 @@ class QueuePanel(QWidget):
 
     def clear(self):
         """清空列表"""
-        reply = QMessageBox.question(
-            self,
+        dialog = MessageDialog(
             "确认清空",
             "确定要清空下载队列吗？正在下载的任务将失去可见性。",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            self,
         )
-        if reply == QMessageBox.StandardButton.Yes:
+        dialog.yesButton.setText("确定")
+        dialog.cancelButton.setText("取消")
+
+        if dialog.exec():
             self.table_widget.setRowCount(0)
             self._items.clear()
             self._stats = {"pending": 0, "completed": 0, "failed": 0, "skipped": 0, "downloading": 0}

@@ -15,6 +15,8 @@ from qfluentwidgets import (
     ProgressBar,
     PushButton,
     StrongBodyLabel,
+    isDarkTheme,
+    qconfig,
 )
 
 from ..models import AppConfig, DownloadItem
@@ -75,7 +77,7 @@ class DownloadPanel(QWidget):
         layout.addWidget(url_card)
 
         # 主内容区域（使用分割器）
-        splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        self.splitter = QSplitter(Qt.Orientation.Horizontal, self)
 
         # 左侧：目录树
         left_panel = CardWidget(self)
@@ -106,7 +108,7 @@ class DownloadPanel(QWidget):
         self.stats_label = CaptionLabel("文件: 0 | 目录: 0 | 已选: 0")
         left_layout.addWidget(self.stats_label)
 
-        splitter.addWidget(left_panel)
+        self.splitter.addWidget(left_panel)
 
         # 右侧：日志和预览
         right_panel = QWidget(self)
@@ -127,10 +129,10 @@ class DownloadPanel(QWidget):
 
         right_layout.addWidget(log_card, 1)
 
-        splitter.addWidget(right_panel)
-        splitter.setSizes([600, 400])
+        self.splitter.addWidget(right_panel)
+        self.splitter.setSizes([600, 400])
 
-        layout.addWidget(splitter, 1)
+        layout.addWidget(self.splitter, 1)
 
         # 底部按钮区域
         bottom_card = CardWidget(self)
@@ -155,6 +157,29 @@ class DownloadPanel(QWidget):
         bottom_layout.addWidget(self.progress_bar)
 
         layout.addWidget(bottom_card)
+
+        # 初始化分割器样式并连接主题变化信号
+        self._update_splitter_style()
+        qconfig.themeChanged.connect(lambda _: self._update_splitter_style())
+
+    def _update_splitter_style(self):
+        """更新分割器样式以适配当前主题"""
+        if isDarkTheme():
+            handle_color = "#3d3d3d"
+            hover_color = "#505050"
+        else:
+            handle_color = "#d0d0d0"
+            hover_color = "#b0b0b0"
+
+        self.splitter.setStyleSheet(f"""
+            QSplitter::handle {{
+                background-color: {handle_color};
+                width: 2px;
+            }}
+            QSplitter::handle:hover {{
+                background-color: {hover_color};
+            }}
+        """)
 
     def _connect_signals(self):
         """连接信号"""
