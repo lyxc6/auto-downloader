@@ -234,7 +234,7 @@ class HttpClient:
         return None
 
     def head_file_size(self, url: str, retries: int = 2) -> int | None:
-        """发送 HEAD 请求获取文件大小（Content-Length）
+        """发送 HEAD 请求获取文件大小，失败时回退到 GET（stream=True，只读 headers）
 
         Args:
             url: 文件URL
@@ -247,16 +247,24 @@ class HttpClient:
         for attempt in range(retries):
             try:
                 resp = session.head(url, timeout=30, allow_redirects=True)
-                if resp.status_code in (405, 501):
+                # 服务器不支持 HEAD 或返回错误，回退到 GET
+                if resp.status_code in (405, 501) or resp.status_code >= 400:
                     resp.close()
-                    return None
+                    logger.debug("HEAD 返回 %d，回退 GET: %s", resp.status_code, url)
+                    resp = session.get(url, stream=True, timeout=30)
+                    resp.raise_for_status()
+                    cl = resp.headers.get("content-length")
+                    resp.close()
+                    return int(cl) if cl else None
                 resp.raise_for_status()
                 cl = resp.headers.get("content-length")
                 resp.close()
                 return int(cl) if cl else None
-            except requests.RequestException:
+            except requests.RequestException as e:
+                logger.debug("获取文件大小失败 (第%d次): %s - %s", attempt + 1, url, e)
                 if attempt < retries - 1:
                     time.sleep(1)
+        logger.warning("获取文件大小最终失败: %s", url)
         return None
 
     def close(self):

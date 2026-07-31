@@ -78,8 +78,8 @@ class DownloadService:
         """
         try:
             resp = self.session.head(url, timeout=self.timeout, allow_redirects=True)
-            # 部分服务器不支持 HEAD，回退到 GET
-            if resp.status_code in (405, 501):
+            # 部分服务器不支持 HEAD 或返回错误，回退到 GET
+            if resp.status_code in (405, 501) or resp.status_code >= 400:
                 resp.close()  # 关闭 HEAD 响应
                 resp = self.session.get(url, stream=True, timeout=self.timeout)
                 resp.raise_for_status()

@@ -42,18 +42,41 @@ class TestHttpClientHeadFileSize:
 
         assert result is None
 
-    def test_head_405_returns_none(self):
-        """HEAD 返回 405（Method Not Allowed）"""
+    def test_head_405_falls_back_to_get(self):
+        """HEAD 返回 405 时回退到 GET"""
         client = HttpClient()
         mock_session = MagicMock()
-        mock_resp = MagicMock()
-        mock_resp.status_code = 405
-        mock_session.head.return_value = mock_resp
+        mock_head_resp = MagicMock()
+        mock_head_resp.status_code = 405
+        mock_get_resp = MagicMock()
+        mock_get_resp.status_code = 200
+        mock_get_resp.headers = {"content-length": "5678"}
+        mock_session.head.return_value = mock_head_resp
+        mock_session.get.return_value = mock_get_resp
         client._session = mock_session
 
         result = client.head_file_size("https://example.com/file.txt")
 
-        assert result is None
+        assert result == 5678
+        mock_get_resp.close.assert_called()
+
+    def test_head_404_falls_back_to_get(self):
+        """HEAD 返回 404 时回退到 GET"""
+        client = HttpClient()
+        mock_session = MagicMock()
+        mock_head_resp = MagicMock()
+        mock_head_resp.status_code = 404
+        mock_get_resp = MagicMock()
+        mock_get_resp.status_code = 200
+        mock_get_resp.headers = {"content-length": "9999"}
+        mock_session.head.return_value = mock_head_resp
+        mock_session.get.return_value = mock_get_resp
+        client._session = mock_session
+
+        result = client.head_file_size("https://example.com/file.txt")
+
+        assert result == 9999
+        mock_get_resp.close.assert_called()
 
     def test_head_exception_retries(self):
         """HEAD 请求异常重试"""

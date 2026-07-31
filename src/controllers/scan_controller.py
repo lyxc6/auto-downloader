@@ -20,7 +20,7 @@ class ScanController(QObject):
     # 信号定义
     items_found = Signal(list)  # List[DownloadItem]（批量）
     scan_progress = Signal(int, int)  # current, total
-    scan_completed = Signal(int, int)  # files, dirs
+    scan_completed = Signal(int, int, str)  # files, dirs, dir_path (空=全量扫描)
     scan_error = Signal(str)  # error_message
     log_message = Signal(str, str)  # message, level
     dir_scanned = Signal(str)  # dir_path（目录扫描完成）
@@ -216,7 +216,7 @@ class ScanController(QObject):
                     self.cache_manager.set_scan_complete(True)
 
                 # 扫描完成
-                self.scan_completed.emit(file_count, dir_count)
+                self.scan_completed.emit(file_count, dir_count, "")
 
                 logger.info("扫描完成: 文件=%d 目录=%d", file_count, dir_count)
 
@@ -330,7 +330,7 @@ class ScanController(QObject):
                         self.scan_progress.emit(file_count, dir_count)
                         buffer = []
 
-                self.scan_completed.emit(file_count, dir_count)
+                self.scan_completed.emit(file_count, dir_count, dir_path)
                 logger.info("单目录扫描完成: 文件=%d 目录=%d", file_count, dir_count)
 
                 self.log_message.emit(f"目录刷新完成: 文件 {file_count}, 目录 {dir_count}", "success")
@@ -369,11 +369,12 @@ class ScanController(QObject):
             self._thread.join(timeout=5)
             self._thread = None
 
-    def start_size_prefetch(self, max_workers: int = 5):
+    def start_size_prefetch(self, max_workers: int = 5, dir_path: str = ""):
         """扫描完成后，并行发送 HEAD 请求预取文件大小
 
         Args:
             max_workers: 并行线程数
+            dir_path: 指定目录路径（空=预取全部，非空=只预取该目录下的文件）
         """
         # 防重复：如果已有 prefetch 在运行，先取消它
         if self._prefetch_thread and self._prefetch_thread.is_alive():
@@ -381,10 +382,11 @@ class ScanController(QObject):
             self.cancel_size_prefetch()
             self._prefetch_thread.join(timeout=2)
 
-        # 收集所有需要预取大小的文件
+        # 收集需要预取大小的文件
         files_to_prefetch = [
             item for item in self.cache_manager.get_all_items()
             if item.is_file and item.size <= 0 and item.url
+            and (not dir_path or item.full_path.startswith(dir_path + "/"))
         ]
 
         if not files_to_prefetch:
@@ -401,7 +403,7 @@ class ScanController(QObject):
                 def head_one(item: DownloadItem) -> tuple[str, int | None]:
                     if self._prefetch_cancel_flag.is_set():
                         return (item.item_id, None)
-                    size = http_client.head_file_size(item.url, retries=1)
+                    size = http_client.head_file_size(item.url, retries=2)
                     return (item.item_id, size)
 
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -460,7 +462,7 @@ class ScanController(QObject):
                 stats = self.cache_manager.get_stats()
                 self.log_message.emit(f"文件: {stats['total_files']}, 目录: {stats['total_dirs']}", "info")
                 self.log_message.emit("=" * 50, "header")
-                self.scan_completed.emit(stats["total_files"], stats["total_dirs"])
+                self.scan_completed.emit(stats["total_files"], stats["total_dirs"], "")
                 return
 
             # 扫描未完成 → 断点续扫
