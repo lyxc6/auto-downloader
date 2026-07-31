@@ -309,7 +309,7 @@ class ScanService:
                 return base_url + raw_href + f"{sep}page={page}"
             return base_url + raw_href
         if dir_path:
-            query = f"?dir={quote(dir_path)}"
+            query = f"?dir={quote(quote(dir_path))}"
             if page > 1:
                 query += f"&page={page}"
         else:
