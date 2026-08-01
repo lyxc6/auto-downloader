@@ -1,4 +1,6 @@
 {
   "reportMissingTypeStubs": false,
-  "reportUnknownMemberType": false
+  "reportUnknownMemberType": false,
+  "venvPath": ".",
+  "venv": ".venv"
 }
