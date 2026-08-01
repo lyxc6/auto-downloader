@@ -149,8 +149,9 @@ class Application:
     # ==================== 配置变更 ====================
 
     def _on_config_changed(self, changes: dict[str, Any]) -> None:
-        """配置变更通知：设置已保存，下一批次下载/扫描生效"""
-        logger.info("配置已更改，下次操作生效: %s", changes)
+        """配置变更通知：统一落盘（AppConfig 为唯一真值源，面板只发信号不直接保存）"""
+        self.config.save()
+        logger.info("配置已更改并保存，下次操作生效: %s", changes)
         try:
             InfoBar.success(
                 title="设置",

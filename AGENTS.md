@@ -113,15 +113,17 @@ from PySide6.QtWidgets import QPushButton, QLineEdit
 - Supports theme switching (light/dark/auto) via `setTheme()`
 - Cache file location: same directory as exe (frozen) or script (dev)
 - Tree widget uses virtual loading for large datasets (lazy expansion)
+- AppConfig is the single source of truth for settings; views only emit `config_changed`, app.py persists
+- CacheManager locks internally; callers must use snapshot methods (`checked_items_snapshot`) instead of touching raw sets
 
 ## Conventions
 
 - All UI strings in Chinese (Simplified)
-- File paths use `os.path` for cross-platform compatibility
+- File paths use `os.path` for cross-platform compatibility (base dir via `helpers.get_app_dir()`)
 - HTTP requests use `requests.Session` with retry logic
 - PySide6 signal-slot pattern for UI updates
-- Use `qconfig` for theme persistence
-- Line endings: CRLF (configured in ruff format)
+- `qconfig` only mirrors theme for FluentWidgets; AppConfig remains the persisted source of truth
+- Line endings: LF (configured in ruff format)
 
 ## Gotchas
 

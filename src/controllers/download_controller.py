@@ -2,13 +2,13 @@
 
 import logging
 import os
-import sys
 import threading
 
 from PySide6.QtCore import QObject, Signal
 
 from ..models import AppConfig, DownloadItem
 from ..services import DownloadService
+from ..utils.helpers import get_app_dir
 
 logger = logging.getLogger(__name__)
 
@@ -39,12 +39,8 @@ class DownloadController(QObject):
             return self._is_downloading
 
     def _get_download_dir(self) -> str:
-        """获取下载目录"""
-        if getattr(sys, "frozen", False):
-            return os.path.join(os.path.dirname(sys.executable), self.config.download_dir)
-        return os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), self.config.download_dir
-        )
+        """获取下载目录（exe 所在目录或项目根目录 + download_dir）"""
+        return os.path.join(get_app_dir(), self.config.download_dir)
 
     def _create_service(self) -> DownloadService:
         """创建下载服务"""

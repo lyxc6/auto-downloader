@@ -46,7 +46,7 @@ def test_set_url_method_exists_and_sets(cache):
 def test_set_checked_items_atomic_with_save(cache, tmp_path):
     """并发 set_checked_items + save 不丢失更新、缓存文件始终合法"""
     for i in range(30):
-        cache.add_item(_make_item(f"f{i}"))
+        cache.try_add_item(_make_item(f"f{i}"))
 
     stop = threading.Event()
     errors = []
@@ -132,7 +132,7 @@ def test_url_access_is_lock_protected(cache):
 
 def test_set_checked_items_does_not_lose_toggle(cache):
     """set_checked_items 与 toggle_check 均在锁内，不会因无锁重赋值丢失更新"""
-    cache.add_item(_make_item("f0"))
+    cache.try_add_item(_make_item("f0"))
     cache.toggle_check("f0")  # 锁内加入 f0
     assert "f0" in cache.checked_items
     cache.set_checked_items({"f1"})  # 锁内替换

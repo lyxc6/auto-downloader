@@ -4,7 +4,10 @@ import logging
 import os
 import sys
 
+from .helpers import get_app_dir
+
 _log_setup_done = False
+logger = logging.getLogger(__name__)
 
 
 def setup_logging(log_dir: str = "", level: int = logging.DEBUG) -> logging.Logger:
@@ -30,10 +33,7 @@ def setup_logging(log_dir: str = "", level: int = logging.DEBUG) -> logging.Logg
     )
 
     if not log_dir:
-        if getattr(sys, "frozen", False):
-            log_dir = os.path.dirname(sys.executable)
-        else:
-            log_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        log_dir = get_app_dir()
 
     log_path = os.path.join(log_dir, "app.log")
     try:
@@ -42,8 +42,8 @@ def setup_logging(log_dir: str = "", level: int = logging.DEBUG) -> logging.Logg
         fh.setLevel(logging.INFO)
         fh.setFormatter(fmt)
         root_logger.addHandler(fh)
-    except OSError:
-        pass
+    except OSError as e:
+        logger.warning("无法创建日志文件 %s: %s", log_path, e)
 
     ch = logging.StreamHandler(sys.stdout)
     ch.setLevel(level)

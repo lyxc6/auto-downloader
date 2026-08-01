@@ -325,7 +325,9 @@ class ScanController(QObject):
         if not url or not self.cache_manager.has_data_for(url):
             return False
         logger.info("启动时自动加载缓存: %s", url)
-        self.cache_load_completed.emit(self.cache_manager.get_tree_data_snapshot(), self.cache_manager.checked_items)
+        self.cache_load_completed.emit(
+            self.cache_manager.get_tree_data_snapshot(), self.cache_manager.checked_items_snapshot()
+        )
         return True
 
     def start_scan_with_cache(self, url: str, scan_mode: str = "dfs", parallel: bool = False):
@@ -341,7 +343,7 @@ class ScanController(QObject):
 
             # 发射缓存加载完成信号，由视图层处理UI更新
             self.cache_load_completed.emit(
-                self.cache_manager.get_tree_data_snapshot(), self.cache_manager.checked_items
+                self.cache_manager.get_tree_data_snapshot(), self.cache_manager.checked_items_snapshot()
             )
 
             # 扫描完整 → 直接返回
@@ -349,9 +351,9 @@ class ScanController(QObject):
                 self.log_message.emit("=" * 50, "header")
                 self.log_message.emit("从缓存加载目录结构", "info")
                 stats = self.cache_manager.get_stats()
-                self.log_message.emit(f"文件: {stats['total_files']}, 目录: {stats['total_dirs']}", "info")
+                self.log_message.emit(f"文件: {stats.total_files}, 目录: {stats.total_dirs}", "info")
                 self.log_message.emit("=" * 50, "header")
-                self.scan_completed.emit(stats["total_files"], stats["total_dirs"], "")
+                self.scan_completed.emit(stats.total_files, stats.total_dirs, "")
                 return
 
             # 扫描未完成 → 断点续扫
@@ -361,7 +363,7 @@ class ScanController(QObject):
             self.log_message.emit("=" * 50, "header")
             self.log_message.emit("▶▶▶ 检测到未完成扫描，继续从断点续扫", "success")
             self.log_message.emit(
-                f"已扫描目录: {len(scanned_dirs)} 个 | 已缓存: 文件 {stats['total_files']}, 目录 {stats['total_dirs']}",
+                f"已扫描目录: {len(scanned_dirs)} 个 | 已缓存: 文件 {stats.total_files}, 目录 {stats.total_dirs}",
                 "info",
             )
             self.log_message.emit("=" * 50, "header")

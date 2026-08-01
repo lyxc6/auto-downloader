@@ -270,37 +270,30 @@ class SettingsPanel(QWidget):
 
     def _on_folder_changed(self, folder: str):
         self.config.download_dir = folder
-        self.config.save()
         self.config_changed.emit({"download_dir": folder})
 
     def _on_workers_changed(self, value: int):
         self.config.max_workers = value
-        self.config.save()
         self.config_changed.emit({"max_workers": value})
 
     def _on_retry_changed(self, value: int):
         self.config.retry_times = value
-        self.config.save()
         self.config_changed.emit({"retry_times": value})
 
     def _on_timeout_changed(self, value: int):
         self.config.timeout = value
-        self.config.save()
         self.config_changed.emit({"timeout": value})
 
     def _on_depth_changed(self, value: int):
         self.config.max_depth = value
-        self.config.save()
         self.config_changed.emit({"max_depth": value})
 
     def _on_scan_workers_changed(self, value: int):
         self.config.scan_max_workers = value
-        self.config.save()
         self.config_changed.emit({"scan_max_workers": value})
 
     def _on_scan_mode_changed(self, value):
         self.config.scan_mode = value
-        self.config.save()
         self.config_changed.emit({"scan_mode": value})
 
     def _on_theme_changed(self, configItem):
@@ -308,17 +301,15 @@ class SettingsPanel(QWidget):
         theme_map = {Theme.LIGHT: "light", Theme.DARK: "dark", Theme.AUTO: "auto"}
         theme = theme_map.get(theme_value, "auto")
         self.config.theme = theme
-        self.config.save()
         self.theme_changed.emit(theme)
+        self.config_changed.emit({"theme": theme})
 
     def _on_channel_changed(self, value):
         self.config.update_channel = value
-        self.config.save()
         self.config_changed.emit({"update_channel": value})
 
     def _on_auto_check_changed(self, checked: bool):
         self.config.auto_check_update = checked
-        self.config.save()
         self.config_changed.emit({"auto_check_update": checked})
 
     def _on_check_update_clicked(self):

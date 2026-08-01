@@ -8,13 +8,14 @@
 
 from unittest.mock import MagicMock
 
+from src.models import CacheStats
 from src.presenters import ScanPresenter
 
 
-def _make_presenter():
+def _make_presenter(stats: CacheStats | None = None):
     obj = ScanPresenter.__new__(ScanPresenter)
     obj._cache_manager = MagicMock()
-    obj._cache_manager.get_stats.return_value = {"total_files": 10, "total_dirs": 3, "checked_count": 2}
+    obj._cache_manager.get_stats.return_value = stats or CacheStats(total_files=10, total_dirs=3, checked_count=2)
     obj._view = MagicMock()
     return obj
 
@@ -36,8 +37,7 @@ def test_on_checked_changed_updates_stats():
 
 def test_on_checked_changed_empty_set():
     """取消全部勾选也应触发更新（checked=0）"""
-    presenter = _make_presenter()
-    presenter._cache_manager.get_stats.return_value = {"total_files": 10, "total_dirs": 3, "checked_count": 0}
+    presenter = _make_presenter(CacheStats(total_files=10, total_dirs=3, checked_count=0))
     presenter._on_checked_changed(set())
     presenter._cache_manager.set_checked_items.assert_called_once_with(set())
     args = presenter._view.update_stats.call_args.args

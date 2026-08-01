@@ -71,7 +71,7 @@ class ScanPresenter(QObject):
         """勾选状态变化：同步到缓存并实时更新已选统计"""
         self._cache_manager.set_checked_items(checked_ids)
         stats = self._cache_manager.get_stats()
-        self._view.update_stats(stats["total_files"], stats["total_dirs"], stats["checked_count"])
+        self._view.update_stats(stats.total_files, stats.total_dirs, stats.checked_count)
 
     def _on_url_text_changed(self):
         """URL 输入变化防抖 → 更新扫描按钮状态"""
@@ -109,7 +109,7 @@ class ScanPresenter(QObject):
             return
 
         # 清除 Widget 内部数据，防止僵尸节点残留
-        checked_backup = set(self._cache_manager.checked_items)
+        checked_backup = self._cache_manager.checked_items_snapshot()
         self._view.prepare_refresh(checked_backup)
 
         self._config.last_url = url
@@ -142,7 +142,7 @@ class ScanPresenter(QObject):
 
         # 更新统计
         stats = self._cache_manager.get_stats()
-        self._view.update_stats(stats["total_files"], stats["total_dirs"], stats["checked_count"])
+        self._view.update_stats(stats.total_files, stats.total_dirs, stats.checked_count)
 
         self._view.set_scanning(True)
         self._view.download_btn.setEnabled(False)
@@ -160,8 +160,8 @@ class ScanPresenter(QObject):
         self._view.apply_cache_loaded(tree_data, checked_items)
 
         stats = self._cache_manager.get_stats()
-        self._view.update_stats(stats["total_files"], stats["total_dirs"], stats["checked_count"])
-        self._view.download_btn.setEnabled(stats["total_files"] > 0)
+        self._view.update_stats(stats.total_files, stats.total_dirs, stats.checked_count)
+        self._view.download_btn.setEnabled(stats.total_files > 0)
         self.update_scan_button()
 
         # 显示目录扫描状态
@@ -169,7 +169,7 @@ class ScanPresenter(QObject):
 
     def _on_scan_progress(self, files: int, dirs: int):
         """扫描进度更新"""
-        self._view.update_stats(files, dirs, len(self._cache_manager.checked_items))
+        self._view.update_stats(files, dirs, self._cache_manager.checked_count())
 
     def _on_scan_completed(self, file_count: int, dir_count: int, dir_path: str = ""):
         """扫描完成"""
@@ -178,7 +178,7 @@ class ScanPresenter(QObject):
 
         # 更新统计
         stats = self._cache_manager.get_stats()
-        self._view.update_stats(stats["total_files"], stats["total_dirs"], stats["checked_count"])
+        self._view.update_stats(stats.total_files, stats.total_dirs, stats.checked_count)
 
         self._auto_save.stop_if_idle()
         self.update_scan_button()
@@ -211,4 +211,4 @@ class ScanPresenter(QObject):
         """文件大小预取完成"""
         self._auto_save.stop_if_idle()
         stats = self._cache_manager.get_stats()
-        self._view.update_stats(stats["total_files"], stats["total_dirs"], stats["checked_count"])
+        self._view.update_stats(stats.total_files, stats.total_dirs, stats.checked_count)

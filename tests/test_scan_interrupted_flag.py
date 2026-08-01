@@ -86,7 +86,7 @@ def test_start_scan_with_cache_complete_path_clears_flag():
     """缓存完整直发完成路径也会清空中断标志"""
     cache = CacheManager("")
     cache.set_url("http://x")
-    cache.add_item(
+    cache.try_add_item(
         DownloadItem(item_id="a.bin", name="a.bin", url="http://x/a.bin", item_type=ItemType.FILE, full_path="a.bin")
     )
     cache.set_scan_complete(True)

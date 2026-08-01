@@ -112,7 +112,7 @@ class TestCacheManagerUpdateItemSize:
             full_path="file1.txt",
             size=0,
         )
-        cm.add_item(item)
+        cm.try_add_item(item)
 
         result = cm.update_item_size("file1", 12345)
         assert result is True
@@ -136,7 +136,7 @@ class TestCacheManagerUpdateItemSize:
                 parent_id="",
                 full_path=f"file{i}.txt",
             )
-            cm.add_item(item)
+            cm.try_add_item(item)
 
         errors = []
 
