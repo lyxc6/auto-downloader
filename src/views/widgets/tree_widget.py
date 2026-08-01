@@ -248,29 +248,25 @@ class DownloadTreeWidget(TreeWidget):
             self._all_items[iid] for iid in self._checked_set if iid in self._all_items and self._all_items[iid].is_file
         ]
 
-    def select_all(self):
-        """全选：所有文件加入真值源，刷新已实现节点"""
-        self._checked_set = {iid for iid, it in self._all_items.items() if it.is_file}
+    def _set_checked_set(self, checked_ids: set[str], notify: bool = False) -> None:
+        """设置真值源并刷新已实现节点三态（select_all/deselect_all/apply_checked_items 共用）"""
+        self._checked_set = set(checked_ids)
         self._updating = True
         try:
             for iid, tw in self._items.items():
                 tw.setCheckState(0, self._compute_check_state(iid))
         finally:
             self._updating = False
-        if self._check_sync_cb:
+        if notify and self._check_sync_cb:
             self._check_sync_cb(set(self._checked_set))
+
+    def select_all(self):
+        """全选：所有文件加入真值源，刷新已实现节点"""
+        self._set_checked_set({iid for iid, it in self._all_items.items() if it.is_file}, notify=True)
 
     def deselect_all(self):
         """取消全选：清空真值源，刷新已实现节点"""
-        self._checked_set.clear()
-        self._updating = True
-        try:
-            for iid, tw in self._items.items():
-                tw.setCheckState(0, self._compute_check_state(iid))
-        finally:
-            self._updating = False
-        if self._check_sync_cb:
-            self._check_sync_cb(set(self._checked_set))
+        self._set_checked_set(set(), notify=True)
 
     def _on_item_changed(self, tw, column):
         """勾选状态变化：先变异真值源，再级联已实现节点"""
@@ -331,77 +327,9 @@ class DownloadTreeWidget(TreeWidget):
         """收起所有"""
         self.collapseAll()
 
-    def remove_item(self, item_id: str):
-        """增量修剪：移除节点及所有后代（已实现+未实现），幂等"""
-        item = self._all_items.get(item_id)
-        parent_id = item.parent_id if item is not None else ""
-        tree_item = self._items.get(item_id)
-
-        descendant_ids = set()
-        queue = deque(self._children_index.get(item_id, []))
-        while queue:
-            cid = queue.popleft()
-            descendant_ids.add(cid)
-            queue.extend(self._children_index.get(cid, []))
-
-        if tree_item is not None:
-            realized_desc = set()
-
-            def _collect_realized(tw_item, acc):
-                for i in range(tw_item.childCount()):
-                    child = tw_item.child(i)
-                    cid = child.data(0, Qt.ItemDataRole.UserRole)
-                    if cid is not None:
-                        acc.add(cid)
-                    _collect_realized(child, acc)
-
-            _collect_realized(tree_item, realized_desc)
-            parent = tree_item.parent()
-            if parent is not None:
-                parent.removeChild(tree_item)
-            else:
-                idx = self.indexOfTopLevelItem(tree_item)
-                if idx >= 0:
-                    self.takeTopLevelItem(idx)
-            self._items.pop(item_id, None)
-            for did in realized_desc:
-                self._items.pop(did, None)
-
-        for did in descendant_ids:
-            self._all_items.pop(did, None)
-            self._children_index.pop(did, None)
-            self._loaded.discard(did)
-            self._checked_set.discard(did)
-        self._all_items.pop(item_id, None)
-        self._children_index.pop(item_id, None)
-        self._loaded.discard(item_id)
-        self._checked_set.discard(item_id)
-
-        siblings = self._children_index.get(parent_id)
-        if siblings is not None:
-            try:
-                siblings.remove(item_id)
-            except ValueError:
-                pass
-
-    def recompute_parent_states(self):
-        """从真值源重算所有已实现节点的三态"""
-        self._updating = True
-        try:
-            for iid, tw in self._items.items():
-                tw.setCheckState(0, self._compute_check_state(iid))
-        finally:
-            self._updating = False
-
     def apply_checked_items(self, checked_ids: set[str]) -> None:
         """按 checked_ids 设置真值源，并刷新已实现节点三态（恢复场景）"""
-        self._checked_set = set(checked_ids)
-        self._updating = True
-        try:
-            for iid, tw in self._items.items():
-                tw.setCheckState(0, self._compute_check_state(iid))
-        finally:
-            self._updating = False
+        self._set_checked_set(checked_ids)
 
     def mark_loaded(self, item_id: str) -> None:
         """标记节点为已加载（子节点已填充或即将在扫描中增量填充）"""
@@ -489,9 +417,11 @@ class DownloadTreeWidget(TreeWidget):
             self._children_index.pop(did, None)
             self._loaded.discard(did)
             self._checked_set.discard(did)
+            self._unscanned_dirs.discard(did)
 
         self._children_index.pop(dir_item_id, None)
         self._loaded.discard(dir_item_id)
+        self._unscanned_dirs.discard(dir_item_id)
 
         tree_item = self._items.get(dir_item_id)
         if tree_item is not None and dir_item_id in self._all_items:

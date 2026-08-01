@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import threading
 import time
 from typing import Any, cast
 
@@ -22,7 +23,7 @@ class CacheManager:
         self.unscanned_dirs: set[str] = set()
         self.scan_complete: bool = False
         self.url: str = ""
-        self._lock = __import__("threading").Lock()
+        self._lock = threading.Lock()
         # 增量计数器（避免 get_stats 遍历 tree_data）
         self._file_count = 0
         self._dir_count = 0
@@ -131,6 +132,7 @@ class CacheManager:
         with self._lock:
             self.tree_data.clear()
             self.scan_complete = False
+            self.unscanned_dirs.clear()
             self._file_count = 0
             self._dir_count = 0
 
@@ -221,16 +223,9 @@ class CacheManager:
         with self._lock:
             return dict(self.tree_data)
 
-    def add_item(self, item: DownloadItem):
-        """添加项目"""
-        with self._lock:
-            is_new = item.item_id not in self.tree_data
-            self.tree_data[item.item_id] = item
-            if is_new:
-                if item.is_file:
-                    self._file_count += 1
-                elif item.is_dir:
-                    self._dir_count += 1
+    def add_item(self, item: DownloadItem) -> bool:
+        """添加项目（原子检查+添加，返回 True 表示真正新增）"""
+        return self.try_add_item(item)
 
     def try_add_item(self, item: DownloadItem) -> bool:
         """原子检查+添加（返回 True 表示真正新增，False 表示已存在跳过）"""
@@ -243,17 +238,6 @@ class CacheManager:
             elif item.is_dir:
                 self._dir_count += 1
             return True
-
-    def remove_item(self, item_id: str):
-        """移除项目"""
-        with self._lock:
-            removed = self.tree_data.pop(item_id, None)
-            if removed is not None:
-                if removed.is_file:
-                    self._file_count -= 1
-                elif removed.is_dir:
-                    self._dir_count -= 1
-            self.checked_items.discard(item_id)
 
     def remove_directory_descendants(self, dir_item_id: str) -> set[str]:
         """移除目录的所有后代（含子目录和文件），返回被移除的 item_id 集合。线程安全。"""
@@ -279,6 +263,7 @@ class CacheManager:
                     elif removed.is_dir:
                         self._dir_count -= 1
                 self.checked_items.discard(rid)
+                self.unscanned_dirs.discard(rid)
             self.scanned_dirs.discard(dir_item_id)
             return to_remove
 

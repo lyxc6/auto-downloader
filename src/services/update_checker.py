@@ -106,7 +106,7 @@ class UpdateCheckWorker(QThread):
             return
 
         latest = stable_releases[0]
-        remote_tag = latest.get("tag_name", "")
+        remote_tag = latest.get("tag_name") or ""
         remote_version = remote_tag.lstrip("v")
 
         try:
@@ -124,10 +124,10 @@ class UpdateCheckWorker(QThread):
                 "has_update": has_update,
                 "version": remote_version,
                 "tag": remote_tag,
-                "url": latest.get("html_url", GITHUB_RELEASES_URL),
+                "url": latest.get("html_url") or GITHUB_RELEASES_URL,
                 "download_url": _extract_download_url(latest),
-                "notes": latest.get("body", ""),
-                "published_at": latest.get("published_at", ""),
+                "notes": latest.get("body") or "",
+                "published_at": latest.get("published_at") or "",
             }
         )
 
@@ -140,7 +140,7 @@ class UpdateCheckWorker(QThread):
             return
 
         latest = test_releases[0]
-        published_at = latest.get("published_at", "")
+        published_at = latest.get("published_at") or ""
 
         has_update = False
         if self.last_check_time:
@@ -156,11 +156,11 @@ class UpdateCheckWorker(QThread):
         self.finished.emit(
             {
                 "has_update": has_update,
-                "version": latest.get("tag_name", ""),
-                "tag": latest.get("tag_name", ""),
-                "url": latest.get("html_url", GITHUB_RELEASES_URL),
+                "version": latest.get("tag_name") or "",
+                "tag": latest.get("tag_name") or "",
+                "url": latest.get("html_url") or GITHUB_RELEASES_URL,
                 "download_url": _extract_download_url(latest),
-                "notes": latest.get("body", ""),
+                "notes": latest.get("body") or "",
                 "published_at": published_at,
             }
         )
@@ -235,6 +235,10 @@ def perform_update() -> None:
 
     if not temp_path.exists():
         logger.error("更新文件不存在: %s", temp_path)
+        return
+
+    if not getattr(sys, "frozen", False):
+        logger.warning("开发模式下跳过自动更新替换")
         return
 
     try:

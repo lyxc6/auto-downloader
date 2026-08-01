@@ -94,7 +94,9 @@ class AppConfig:
                             except (ValueError, TypeError):
                                 logger.warning(
                                     "配置项 %s 类型错误: 期望 %s, 得到 %s",
-                                    key, field_type.__name__, type(value).__name__
+                                    key,
+                                    field_type.__name__,
+                                    type(value).__name__,
                                 )
         except Exception:
             logger.error("加载配置失败", exc_info=True)

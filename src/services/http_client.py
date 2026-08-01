@@ -38,6 +38,9 @@ class HttpClient:
         self._error_dirs = 0
         self._error_dirs_lock = threading.Lock()
 
+        # 取消标志（默认新建，可由 ScanService 注入共享事件）
+        self._cancel_flag = threading.Event()
+
         # 回调函数
         self.on_error: Callable[[str], None] | None = None
 
@@ -54,11 +57,11 @@ class HttpClient:
 
     def cancel(self):
         """取消操作"""
-        pass
+        self._cancel_flag.set()
 
     def is_cancelled(self) -> bool:
         """是否已取消"""
-        return False
+        return self._cancel_flag.is_set()
 
     def set_cancel_flag(self, cancel_flag: threading.Event):
         """设置取消标志（由ScanService注入）"""
@@ -66,9 +69,7 @@ class HttpClient:
 
     def _should_stop(self) -> bool:
         """检查是否应该停止"""
-        if hasattr(self, '_cancel_flag') and self._cancel_flag.is_set():
-            return True
-        return self.is_timeout()
+        return self.is_cancelled() or self.is_timeout()
 
     def is_timeout(self) -> bool:
         """是否已超时（无进展超时）"""
@@ -77,12 +78,12 @@ class HttpClient:
         with self._progress_lock:
             return (time.monotonic() - self._last_progress_time) >= self._scan_timeout
 
-    def _update_progress(self):
+    def touch_progress(self):
         """更新进展时间（发现新内容时调用）"""
         with self._progress_lock:
             self._last_progress_time = time.monotonic()
 
-    def _is_dir_timeout(self) -> bool:
+    def is_dir_timeout(self) -> bool:
         """检查当前目录是否超时"""
         if self._dir_scan_timeout <= 0:
             return False
@@ -91,12 +92,12 @@ class HttpClient:
                 return False
             return (time.monotonic() - self._dir_start_time) >= self._dir_scan_timeout
 
-    def _start_dir_timer(self):
+    def start_dir_timer(self):
         """启动目录级计时器"""
         with self._progress_lock:
             self._dir_start_time = time.monotonic()
 
-    def _increment_error_dirs(self):
+    def increment_error_dirs(self):
         """增加错误目录计数器"""
         with self._error_dirs_lock:
             self._error_dirs += 1
@@ -105,6 +106,11 @@ class HttpClient:
         """获取错误目录数量"""
         with self._error_dirs_lock:
             return self._error_dirs
+
+    def get_failed_dirs_count(self) -> int:
+        """获取失败目录数量"""
+        with self._failed_dirs_lock:
+            return self._failed_dirs
 
     def reset_progress(self):
         """重置进度计时器"""
@@ -130,7 +136,7 @@ class HttpClient:
 
         while attempt <= retries:
             # 检查目录级超时（优先级高于全局超时）
-            if self._is_dir_timeout():
+            if self.is_dir_timeout():
                 logger.warning("目录扫描超时，停止重试: %s", url)
                 return None
 
@@ -162,8 +168,7 @@ class HttpClient:
                 # 计算延迟
                 delay = RetryPolicy.calculate_delay(attempt, retry_config)
                 logger.warning(
-                    "获取页面重试 %d/%d: %s -> %s (等待 %.1f秒)",
-                    attempt + 1, max_retries, url, status_code, delay
+                    "获取页面重试 %d/%d: %s -> %s (等待 %.1f秒)", attempt + 1, max_retries, url, status_code, delay
                 )
                 time.sleep(delay)
                 attempt += 1
@@ -182,10 +187,7 @@ class HttpClient:
                     return None
 
                 delay = RetryPolicy.calculate_delay(attempt, retry_config)
-                logger.warning(
-                    "获取页面重试 %d/%d: %s -> %s (等待 %.1f秒)",
-                    attempt + 1, max_retries, url, e, delay
-                )
+                logger.warning("获取页面重试 %d/%d: %s -> %s (等待 %.1f秒)", attempt + 1, max_retries, url, e, delay)
                 time.sleep(delay)
                 attempt += 1
 
@@ -203,10 +205,7 @@ class HttpClient:
                     return None
 
                 delay = RetryPolicy.calculate_delay(attempt, retry_config)
-                logger.warning(
-                    "获取页面重试 %d/%d: %s -> %s (等待 %.1f秒)",
-                    attempt + 1, max_retries, url, e, delay
-                )
+                logger.warning("获取页面重试 %d/%d: %s -> %s (等待 %.1f秒)", attempt + 1, max_retries, url, e, delay)
                 time.sleep(delay)
                 attempt += 1
 
@@ -224,10 +223,7 @@ class HttpClient:
                     return None
 
                 delay = RetryPolicy.calculate_delay(attempt, retry_config)
-                logger.warning(
-                    "获取页面重试 %d/%d: %s -> %s (等待 %.1f秒)",
-                    attempt + 1, max_retries, url, e, delay
-                )
+                logger.warning("获取页面重试 %d/%d: %s -> %s (等待 %.1f秒)", attempt + 1, max_retries, url, e, delay)
                 time.sleep(delay)
                 attempt += 1
 
@@ -245,25 +241,11 @@ class HttpClient:
         """
         session = self.session
         for attempt in range(retries):
-            try:
-                resp = session.head(url, timeout=30, allow_redirects=True)
-                # 服务器不支持 HEAD 或返回错误，回退到 GET
-                if resp.status_code in (405, 501) or resp.status_code >= 400:
-                    resp.close()
-                    logger.debug("HEAD 返回 %d，回退 GET: %s", resp.status_code, url)
-                    resp = session.get(url, stream=True, timeout=30)
-                    resp.raise_for_status()
-                    cl = resp.headers.get("content-length")
-                    resp.close()
-                    return int(cl) if cl else None
-                resp.raise_for_status()
-                cl = resp.headers.get("content-length")
-                resp.close()
-                return int(cl) if cl else None
-            except requests.RequestException as e:
-                logger.debug("获取文件大小失败 (第%d次): %s - %s", attempt + 1, url, e)
-                if attempt < retries - 1:
-                    time.sleep(1)
+            cl, _ = fetch_file_info(session, url, 30)
+            if cl is not None:
+                return cl
+            if attempt < retries - 1:
+                time.sleep(1)
         logger.warning("获取文件大小最终失败: %s", url)
         return None
 
@@ -273,3 +255,50 @@ class HttpClient:
             if self._session is not None:
                 self._session.close()
                 self._session = None
+
+
+def fetch_file_info(session: requests.Session, url: str, timeout: float) -> tuple[int | None, str | None]:
+    """HEAD 获取远端文件信息（Content-Length 与 Accept-Ranges），服务器不支持 HEAD 时回退 GET
+
+    共享逻辑：下载服务与文件大小预取均使用此实现。
+
+    Args:
+        session: 复用的 requests.Session
+        url: 文件URL
+        timeout: 请求超时（秒）
+
+    Returns:
+        (content_length, accept_ranges) 或 (None, None)
+    """
+    try:
+        resp = session.head(url, timeout=timeout, allow_redirects=True)
+        # 部分服务器不支持 HEAD 或返回错误，回退到 GET
+        if resp.status_code in (405, 501) or resp.status_code >= 400:
+            resp.close()
+            logger.debug("HEAD 返回 %d，回退 GET: %s", resp.status_code, url)
+            resp = session.get(url, stream=True, timeout=timeout)
+            resp.raise_for_status()
+            cl = resp.headers.get("content-length")
+            ar = resp.headers.get("accept-ranges")
+            resp.close()
+            return (int(cl) if cl else None, ar)
+        resp.raise_for_status()
+        cl = resp.headers.get("content-length")
+        ar = resp.headers.get("accept-ranges")
+        resp.close()
+        return (int(cl) if cl else None, ar)
+    except requests.ConnectionError as e:
+        logger.warning("连接失败: %s -> %s", url, e)
+        return (None, None)
+    except requests.Timeout as e:
+        logger.warning("请求超时: %s -> %s", url, e)
+        return (None, None)
+    except requests.RequestException as e:
+        logger.warning("请求失败: %s -> %s", url, e)
+        return (None, None)
+    except (ValueError, TypeError) as e:
+        logger.error("解析远端文件信息失败: %s -> %s", url, e)
+        return (None, None)
+    except Exception as e:
+        logger.error("获取远端文件信息失败: %s -> %s", url, e)
+        return (None, None)

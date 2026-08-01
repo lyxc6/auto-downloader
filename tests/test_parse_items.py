@@ -397,7 +397,10 @@ class TestParseItemsDataUrl:
         # 文件名应从 data-filename 解码，而不是从文本内容获取
         assert items[0][1] == "[茹伊映画-Ryyh.net]#江南第一深情_Video.0265.MOV"
         # href 应使用 data-url
-        assert items[0][2] == "/webdav/%E7%A6%8F%E5%88%A9/test/%5B%E8%8C%B9%E4%BC%8A%E6%98%A0%E7%94%BB-Ryyh.net%5D%23%E6%B1%9F%E5%8D%97%E7%AC%AC%E4%B8%80%E6%B7%B1%E6%83%85_Video.0265.MOV"
+        assert (
+            items[0][2]
+            == "/webdav/%E7%A6%8F%E5%88%A9/test/%5B%E8%8C%B9%E4%BC%8A%E6%98%A0%E7%94%BB-Ryyh.net%5D%23%E6%B1%9F%E5%8D%97%E7%AC%AC%E4%B8%80%E6%B7%B1%E6%83%85_Video.0265.MOV"
+        )
 
     def test_data_url_multiple_files(self, service):
         """测试多个 data-url 格式的文件"""

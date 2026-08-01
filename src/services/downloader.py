@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 
 from ..models import DownloadItem, DownloadStats, DownloadStatus
+from .http_client import fetch_file_info
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +47,9 @@ class DownloadService:
             return self._session
 
     def cancel(self):
-        """取消下载"""
+        """取消下载（同时解除暂停阻塞，使等待中的下载立即退出）"""
         self._cancel_flag.set()
+        self._pause_flag.set()
 
     def pause(self):
         """暂停下载"""
@@ -76,37 +78,13 @@ class DownloadService:
         Returns:
             (content_length, accept_ranges) 或 (None, None)
         """
-        try:
-            resp = self.session.head(url, timeout=self.timeout, allow_redirects=True)
-            # 部分服务器不支持 HEAD 或返回错误，回退到 GET
-            if resp.status_code in (405, 501) or resp.status_code >= 400:
-                resp.close()  # 关闭 HEAD 响应
-                resp = self.session.get(url, stream=True, timeout=self.timeout)
-                resp.raise_for_status()
-                cl = resp.headers.get("content-length")
-                ar = resp.headers.get("accept-ranges")
-                resp.close()
-                return (int(cl) if cl else None, ar)
-            resp.raise_for_status()
-            cl = resp.headers.get("content-length")
-            ar = resp.headers.get("accept-ranges")
-            resp.close()  # 关闭 HEAD 响应
-            return (int(cl) if cl else None, ar)
-        except requests.exceptions.ConnectionError as e:
-            logger.warning("连接失败: %s -> %s", url, e)
-            return (None, None)
-        except requests.exceptions.Timeout as e:
-            logger.warning("请求超时: %s -> %s", url, e)
-            return (None, None)
-        except requests.exceptions.RequestException as e:
-            logger.warning("请求失败: %s -> %s", url, e)
-            return (None, None)
-        except (ValueError, TypeError) as e:
-            logger.error("解析远端文件信息失败: %s -> %s", url, e)
-            return (None, None)
-        except Exception as e:
-            logger.error("获取远端文件信息失败: %s -> %s", url, e)
-            return (None, None)
+        return fetch_file_info(self.session, url, self.timeout)
+
+    def _mark_cancelled(self, item: DownloadItem):
+        """标记任务为已取消并通知状态变化"""
+        item.status = DownloadStatus.CANCELLED
+        if self.on_status_changed:
+            self.on_status_changed(item.item_id, DownloadStatus.CANCELLED)
 
     def download_file(self, item: DownloadItem, download_dir: str) -> bool:
         """下载单个文件"""
@@ -114,10 +92,14 @@ class DownloadService:
 
         # 检查取消
         if self.is_cancelled():
+            self._mark_cancelled(item)
             return False
 
         # 等待暂停恢复
         self._pause_flag.wait()
+        if self.is_cancelled():
+            self._mark_cancelled(item)
+            return False
 
         # 构建本地路径
         local_path = os.path.join(download_dir, item.full_path)
@@ -164,6 +146,7 @@ class DownloadService:
 
         for attempt in range(self.retry_times + 1):
             if self.is_cancelled():
+                self._mark_cancelled(item)
                 return False
 
             # 续传模式下，每次重试根据当前文件实际大小重新计算断点
@@ -208,6 +191,7 @@ class DownloadService:
                 with open(local_path, mode) as f:
                     for chunk in resp.iter_content(chunk_size=65536):
                         if self.is_cancelled():
+                            self._mark_cancelled(item)
                             f.close()
                             return False
 
@@ -271,6 +255,7 @@ class DownloadService:
         completed = 0
         failed = 0
         skipped = 0
+        cancelled = 0
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
             futures = [pool.submit(worker, it) for it in items]
@@ -286,6 +271,8 @@ class DownloadService:
                     completed += 1
                 elif status == DownloadStatus.SKIPPED:
                     skipped += 1
+                elif status == DownloadStatus.CANCELLED:
+                    cancelled += 1
                 else:
                     failed += 1
 
@@ -298,6 +285,7 @@ class DownloadService:
         stats.completed = completed
         stats.failed = failed
         stats.skipped = skipped
+        stats.cancelled = cancelled
 
         if on_all_complete:
             on_all_complete(stats)

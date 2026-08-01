@@ -1,6 +1,5 @@
 """下载面板"""
 
-
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QHBoxLayout, QSplitter, QVBoxLayout, QWidget
@@ -32,7 +31,6 @@ class DownloadPanel(QWidget):
     refresh_requested = Signal(str)  # 强制刷新url
     refresh_directory_requested = Signal(str)  # item_id：刷新单个目录
     download_requested = Signal()  # 开始下载
-    stop_requested = Signal()  # 停止
 
     def __init__(self, config: AppConfig, parent: QWidget | None = None):
         super().__init__(parent)
@@ -186,7 +184,6 @@ class DownloadPanel(QWidget):
         self.scan_btn.clicked.connect(self._on_scan_clicked)
         self.refresh_btn.clicked.connect(self._on_refresh_clicked)
         self.download_btn.clicked.connect(self.download_requested)
-        self.stop_download_btn.clicked.connect(self.stop_requested)
         self.clear_log_btn.clicked.connect(self.log_widget.clear)
         self.select_all_btn.clicked.connect(self.tree_widget.select_all)
         self.deselect_all_btn.clicked.connect(self.tree_widget.deselect_all)
@@ -255,3 +252,41 @@ class DownloadPanel(QWidget):
     def clear_tree(self):
         """清空目录树"""
         self.tree_widget.clear_all()
+
+    # ==================== 树操作封装（供应用层调用，避免穿透访问内部组件） ====================
+
+    def prepare_refresh(self, checked_backup: set[str]) -> None:
+        """刷新前清空树并恢复已选集（新到达节点能正确显示勾选状态）"""
+        self.tree_widget.clear_all()
+        self.tree_widget.apply_checked_items(checked_backup)
+
+    def prepare_directory_refresh(self, item_id: str) -> None:
+        """单目录刷新前：移除子节点并标记加载中"""
+        self.tree_widget.remove_children_of(item_id)
+        self.tree_widget.mark_loaded(item_id)
+
+    def apply_cache_loaded(self, tree_data: dict, checked_items: set) -> None:
+        """缓存加载完成：重建目录树"""
+        self.tree_widget.clear_all()
+        self.tree_widget.load_from_items(tree_data)
+        self.tree_widget.apply_checked_items(checked_items)
+
+    def apply_scan_status(self, unscanned_dirs: set[str]) -> None:
+        """刷新目录扫描状态图标"""
+        self.tree_widget.apply_scan_status(unscanned_dirs)
+
+    def apply_dir_scanned(self, dir_path: str) -> None:
+        """单个目录扫描完成标记"""
+        self.tree_widget.mark_dir_scanned(dir_path)
+
+    def update_item_size(self, item_id: str) -> None:
+        """更新单个节点的大小显示"""
+        self.tree_widget.update_item_size(item_id)
+
+    def get_checked_files(self) -> list[DownloadItem]:
+        """获取勾选的文件列表"""
+        return self.tree_widget.get_checked_files()
+
+    def set_check_sync_callback(self, cb) -> None:
+        """注册勾选状态同步回调"""
+        self.tree_widget.set_check_sync_callback(cb)

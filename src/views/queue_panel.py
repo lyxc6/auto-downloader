@@ -19,6 +19,16 @@ from qfluentwidgets import (
     FluentIcon as FIF,
 )
 
+# 状态 -> (显示文本, 颜色枚举) 唯一真值源（update_status 与主题切换共用）
+_STATUS_META: dict[str, tuple[str, FluentSystemColor]] = {
+    "pending": ("等待中", FluentSystemColor.CRITICAL_BACKGROUND),
+    "downloading": ("下载中", FluentSystemColor.CRITICAL_FOREGROUND),
+    "completed": ("已完成", FluentSystemColor.SUCCESS_FOREGROUND),
+    "failed": ("失败", FluentSystemColor.CRITICAL_FOREGROUND),
+    "skipped": ("已跳过", FluentSystemColor.CAUTION_FOREGROUND),
+    "cancelled": ("已取消", FluentSystemColor.CRITICAL_FOREGROUND),
+}
+
 
 class QueuePanel(QWidget):
     """下载队列面板"""
@@ -145,14 +155,7 @@ class QueuePanel(QWidget):
             self._stats[old_status] -= 1
 
         # 设置新状态
-        status_map = {
-            "pending": ("等待中", FluentSystemColor.CRITICAL_BACKGROUND),
-            "downloading": ("下载中", FluentSystemColor.CRITICAL_FOREGROUND),
-            "completed": ("已完成", FluentSystemColor.SUCCESS_FOREGROUND),
-            "failed": ("失败", FluentSystemColor.CRITICAL_FOREGROUND),
-            "skipped": ("已跳过", FluentSystemColor.CAUTION_FOREGROUND),
-        }
-        text, color_enum = status_map.get(status, ("未知", FluentSystemColor.CRITICAL_BACKGROUND))
+        text, color_enum = _STATUS_META.get(status, ("未知", FluentSystemColor.CRITICAL_BACKGROUND))
         info["status_item"].setText(text)
         info["status_item"].setForeground(QColor(color_enum.color().name()))
         info["status"] = status
@@ -189,16 +192,9 @@ class QueuePanel(QWidget):
 
     def _on_theme_changed(self, _theme: Theme):
         """主题切换：刷新所有可见状态标签颜色"""
-        status_map = {
-            "pending": ("等待中", FluentSystemColor.CRITICAL_BACKGROUND),
-            "downloading": ("下载中", FluentSystemColor.CRITICAL_FOREGROUND),
-            "completed": ("已完成", FluentSystemColor.SUCCESS_FOREGROUND),
-            "failed": ("失败", FluentSystemColor.CRITICAL_FOREGROUND),
-            "skipped": ("已跳过", FluentSystemColor.CAUTION_FOREGROUND),
-        }
         for info in self._items.values():
             status = info.get("status")
-            if status and status in status_map:
-                text, color_enum = status_map[status]
+            if status and status in _STATUS_META:
+                text, color_enum = _STATUS_META[status]
                 info["status_item"].setText(text)
                 info["status_item"].setForeground(QColor(color_enum.color().name()))

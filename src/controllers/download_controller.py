@@ -103,12 +103,19 @@ class DownloadController(QObject):
                 self.log_message.emit("", "info")
                 self.log_message.emit("=" * 50, "header")
                 self.log_message.emit("下载完成！", "success")
-                self.log_message.emit(f"成功: {stats.completed}, 失败: {stats.failed}, 跳过: {stats.skipped}", "info")
+                cancelled_text = f", 取消: {stats.cancelled}" if stats.cancelled > 0 else ""
+                self.log_message.emit(
+                    f"成功: {stats.completed}, 失败: {stats.failed}, 跳过: {stats.skipped}{cancelled_text}", "info"
+                )
                 self.log_message.emit("=" * 50, "header")
 
             except Exception as e:
                 logger.error("下载出错", exc_info=True)
                 self.log_message.emit(f"下载出错: {e}", "error")
+                # 补发完成信号，确保 UI 退出"下载中"状态
+                self.batch_completed.emit(
+                    {"total_files": len(items), "completed": 0, "failed": len(items), "skipped": 0, "cancelled": 0}
+                )
             finally:
                 with self._lock:
                     self._is_downloading = False

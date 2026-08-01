@@ -126,7 +126,7 @@ class TestProgressTimeoutIntegration:
             <li><a href="file.txt">file.txt</a></li>
         </ul>
         """
-        with patch.object(service, 'get_page') as mock_get:
+        with patch.object(service, "get_page") as mock_get:
             mock_get.return_value = html
 
             # 调用 _get_all_pages_internal
@@ -146,11 +146,11 @@ class TestProgressTimeoutIntegration:
         service.on_item_found = lambda item: items_found.append(item)
 
         # 模拟扫描
-        with patch.object(service, '_get_all_pages_internal') as mock_get:
+        with patch.object(service, "_get_all_pages_internal") as mock_get:
             mock_get.return_value = (
                 [],  # dirs
                 [("file.txt", "https://example.com/file.txt")],  # files
-                False  # has_error
+                False,  # has_error
             )
 
             # 调用 scan

@@ -81,7 +81,7 @@ class TestDirTimeoutIntegration:
     def test_get_all_pages_respects_dir_timeout(self, service):
         """测试 _get_all_pages_internal 尊重目录级超时"""
         # 创建一个模拟的慢响应场景
-        with patch.object(service, '_get_page_session') as mock_get:
+        with patch.object(service, "_get_page_session") as mock_get:
             # 模拟第一页返回成功
             mock_get.return_value = """
             <ul>
@@ -105,7 +105,7 @@ class TestDirTimeoutIntegration:
 
     def test_fetch_pages_serial_respects_dir_timeout(self, service):
         """测试 _fetch_pages_serial 尊重目录级超时"""
-        with patch.object(service, '_get_page_session') as mock_get:
+        with patch.object(service, "_get_page_session") as mock_get:
             # 模拟页面返回成功
             mock_get.return_value = """
             <ul>
@@ -123,9 +123,7 @@ class TestDirTimeoutIntegration:
             # 调用 _fetch_pages_serial
             all_dirs = []
             all_files = []
-            result = service._fetch_pages_serial(
-                "https://example.com", "test_dir", None, 5, all_dirs, all_files
-            )
+            result = service._fetch_pages_serial("https://example.com", "test_dir", None, 5, all_dirs, all_files)
 
             # 由于目录超时，应该立即返回
             assert result is not None
@@ -134,7 +132,7 @@ class TestDirTimeoutIntegration:
 
     def test_fetch_pages_parallel_respects_dir_timeout(self, service):
         """测试 _fetch_pages_parallel 尊重目录级超时"""
-        with patch.object(service, '_get_page_session') as mock_get:
+        with patch.object(service, "_get_page_session") as mock_get:
             # 模拟页面返回成功
             mock_get.return_value = """
             <ul>
@@ -152,9 +150,7 @@ class TestDirTimeoutIntegration:
             # 调用 _fetch_pages_parallel
             all_dirs = []
             all_files = []
-            result = service._fetch_pages_parallel(
-                "https://example.com", "test_dir", None, 5, all_dirs, all_files
-            )
+            result = service._fetch_pages_parallel("https://example.com", "test_dir", None, 5, all_dirs, all_files)
 
             # 由于目录超时，应该立即返回
             assert result is not None
@@ -199,7 +195,7 @@ class TestDirTimeoutLogging:
 
     def test_dir_timeout_warning_logged(self, service):
         """测试目录级超时时记录警告日志"""
-        with patch('src.services.scanner.logger'):
+        with patch("src.services.scanner.logger"):
             # 设置目录级超时很短
             service._http_client._dir_scan_timeout = 0.1
             service._start_dir_timer()

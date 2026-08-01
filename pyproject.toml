@@ -31,7 +31,7 @@ known-first-party = ["src"]
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
-line-ending = "cr-lf"
+line-ending = "lf"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

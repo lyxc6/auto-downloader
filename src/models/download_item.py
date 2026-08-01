@@ -14,6 +14,7 @@ class DownloadStatus(Enum):
     COMPLETED = "completed"  # 已完成
     FAILED = "failed"  # 失败
     SKIPPED = "skipped"  # 已跳过（文件已存在）
+    CANCELLED = "cancelled"  # 已取消
 
 
 class ItemType(Enum):
@@ -65,6 +66,7 @@ class DownloadItem:
             DownloadStatus.COMPLETED: "已完成",
             DownloadStatus.FAILED: "失败",
             DownloadStatus.SKIPPED: "已跳过",
+            DownloadStatus.CANCELLED: "已取消",
         }
         return status_map.get(self.status, "未知")
 
@@ -93,6 +95,7 @@ class DownloadStats:
     completed: int = 0
     failed: int = 0
     skipped: int = 0
+    cancelled: int = 0
     total_size: int = 0
     downloaded_size: int = 0
 

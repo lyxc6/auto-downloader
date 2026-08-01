@@ -5,7 +5,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from urllib.parse import quote, urljoin
 
 import requests
@@ -77,15 +77,15 @@ class ScanService:
 
     def _update_progress(self):
         """更新进展时间（发现新内容时调用）"""
-        self._http_client._update_progress()
+        self._http_client.touch_progress()
 
     def _is_dir_timeout(self) -> bool:
         """检查当前目录是否超时"""
-        return self._http_client._is_dir_timeout()
+        return self._http_client.is_dir_timeout()
 
     def _start_dir_timer(self):
         """启动目录级计时器"""
-        self._http_client._start_dir_timer()
+        self._http_client.start_dir_timer()
 
     def reset(self):
         """重置状态"""
@@ -140,11 +140,15 @@ class ScanService:
 
     def _increment_error_dirs(self):
         """增加错误目录计数器"""
-        self._http_client._increment_error_dirs()
+        self._http_client.increment_error_dirs()
 
     def get_error_dirs_count(self) -> int:
         """获取错误目录数量"""
         return self._http_client.get_error_dirs_count()
+
+    def get_failed_dirs_count(self) -> int:
+        """获取失败目录数量"""
+        return self._http_client.get_failed_dirs_count()
 
     def _mark_dir_scanned(self, dir_path: str):
         """标记目录为已扫描（线程安全）"""
@@ -169,9 +173,7 @@ class ScanService:
 
     # ==================== 分页缓存方法 ====================
 
-    def get_cached_page_info(
-        self, base_url: str, dir_path: str, html: str
-    ) -> tuple[int, bool]:
+    def get_cached_page_info(self, base_url: str, dir_path: str, html: str) -> tuple[int, bool]:
         """获取缓存的分页信息
 
         Returns:
@@ -209,7 +211,9 @@ class ScanService:
 
     # ==================== 分页获取方法 ====================
 
-    def get_all_pages(self, base_url: str, dir_path: str = "", raw_href: str = "") -> tuple[list[tuple[str, str, str]], list[tuple[str, str]], bool]:
+    def get_all_pages(
+        self, base_url: str, dir_path: str = "", raw_href: str = ""
+    ) -> tuple[list[tuple[str, str, str]], list[tuple[str, str]], bool]:
         """获取目录下所有项目（串行模式）
 
         Returns:
@@ -262,6 +266,7 @@ class ScanService:
             return all_dirs, all_files, True
 
         from bs4 import BeautifulSoup
+
         soup1 = BeautifulSoup(html1, "html.parser")
         items1 = self._parser.parse_items_from_soup(soup1)
 
@@ -283,13 +288,9 @@ class ScanService:
 
         # 2. 并行获取剩余页面（仅在并行模式下）
         if self.parallel_mode and total_pages > 2:
-            self._fetch_pages_parallel(
-                base_url, dir_path, session, total_pages, all_dirs, all_files, raw_href=raw_href
-            )
+            self._fetch_pages_parallel(base_url, dir_path, session, total_pages, all_dirs, all_files, raw_href=raw_href)
         else:
-            self._fetch_pages_serial(
-                base_url, dir_path, session, total_pages, all_dirs, all_files, raw_href=raw_href
-            )
+            self._fetch_pages_serial(base_url, dir_path, session, total_pages, all_dirs, all_files, raw_href=raw_href)
 
         return all_dirs, all_files, has_error
 
@@ -352,8 +353,9 @@ class ScanService:
         for page in range(2, total_pages + 1):
             # 检查目录级超时（优先级高于全局超时）
             if self._is_dir_timeout():
-                logger.warning("目录扫描超时，停止获取后续页面: %s (已获取 %d/%d 页)",
-                              dir_path or "/", page - 1, total_pages)
+                logger.warning(
+                    "目录扫描超时，停止获取后续页面: %s (已获取 %d/%d 页)", dir_path or "/", page - 1, total_pages
+                )
                 break
 
             # 检查全局超时
@@ -394,9 +396,7 @@ class ScanService:
         # 创建独立session用于并行请求
         if session is None:
             session = requests.Session()
-            session.headers.update({
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            })
+            session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
             close_session = True
         else:
             close_session = False
@@ -410,9 +410,7 @@ class ScanService:
             max_workers = min(len(page_tasks), 3)
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_to_page = {
-                    executor.submit(
-                        self._fetch_single_page, base_url, dir_path, session, page, raw_href
-                    ): page
+                    executor.submit(self._fetch_single_page, base_url, dir_path, session, page, raw_href): page
                     for page in page_tasks
                 }
 
@@ -446,16 +444,13 @@ class ScanService:
                 session.close()
 
     def _fetch_single_page(
-        self, base_url: str, dir_path: str,
-        session: requests.Session, page: int, raw_href: str = ""
+        self, base_url: str, dir_path: str, session: requests.Session, page: int, raw_href: str = ""
     ) -> str | None:
         """获取单个页面（线程安全：使用独立 session）"""
         url = self._build_page_url(base_url, dir_path, page, raw_href=raw_href)
         # 创建独立 session，避免跨线程共享
         thread_session = requests.Session()
-        thread_session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win6; x64) AppleWebKit/537.36"
-        })
+        thread_session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
         try:
             return self._get_page_session(thread_session, url)
         finally:
@@ -491,361 +486,200 @@ class ScanService:
         self._start_time = time.monotonic()
 
         if parallel:
-            if scan_mode == "bfs":
-                return self._scan_bfs_parallel(base_url, max_depth, max_workers, dir_path, parent_id)
-            else:
-                return self._scan_dfs_parallel(base_url, max_depth, max_workers, dir_path, parent_id)
-        else:
-            if scan_mode == "bfs":
-                return self._scan_bfs(base_url, max_depth, dir_path, parent_id)
-            else:
-                return self._scan_dfs(base_url, max_depth, dir_path, parent_id)
+            return self._traverse_parallel(base_url, scan_mode, max_depth, max_workers, dir_path, parent_id)
+        return self._traverse_serial(base_url, scan_mode, max_depth, dir_path, parent_id)
 
-    # ==================== DFS 串行扫描 ====================
+    # ==================== 统一遍历引擎 ====================
+    # 任务编码: ("dir", dir_path, parent_id, depth, raw_href)  目录扫描任务
+    #          ("files", dir_path, files)                     文件输出任务（DFS 延后输出用）
+    # DFS 使用栈（pop 右端），BFS 使用队列（pop 左端），串行/并行共用同一套任务语义
 
-    def _scan_dfs(
-        self, base_url: str, max_depth: int, dir_path: str = "", parent_id: str = "", depth: int = 0, raw_href: str = ""
-    ) -> list[DownloadItem]:
-        """深度优先串行扫描"""
-        items: list[DownloadItem] = []
+    def _emit_dir_item(
+        self, full_path: str, name: str, parent_id: str, items: list[DownloadItem], delay: float
+    ) -> None:
+        """创建目录项并发射回调"""
+        item = self._create_item(
+            item_id=full_path,
+            name=name,
+            url="",
+            item_type=ItemType.DIR,
+            parent_id=parent_id,
+            full_path=full_path,
+        )
+        items.append(item)
+        if self.on_item_found:
+            self.on_item_found(item)
+        if delay > 0:
+            time.sleep(delay)
 
-        if depth >= max_depth or self._should_stop():
-            return items
+    def _emit_file_item(self, dir_path: str, name: str, file_url: str, items: list[DownloadItem], delay: float) -> None:
+        """创建文件项并发射回调"""
+        item_id = f"{dir_path}/{name}" if dir_path else name
+        item = self._create_item(
+            item_id=item_id,
+            name=name,
+            url=file_url,
+            item_type=ItemType.FILE,
+            parent_id=dir_path,
+            full_path=item_id,
+        )
+        items.append(item)
+        if self.on_item_found:
+            self.on_item_found(item)
+        if delay > 0:
+            time.sleep(delay)
 
-        if dir_path and self._is_dir_scanned(dir_path):
-            return items
-
-        dirs, files, has_error = self.get_all_pages(base_url, dir_path, raw_href=raw_href)
-        is_empty = not dirs and not files
-        self._log_scan_result(dir_path, dirs, files, is_empty, has_error)
-
-        # 处理子目录
-        for full_path, name, child_href in dirs:
-            if self._should_stop():
-                break
-
-            item = self._create_item(
-                item_id=full_path,
-                name=name,
-                url="",
-                item_type=ItemType.DIR,
-                parent_id=dir_path,
-                full_path=full_path,
-            )
-            items.append(item)
-
-            if self.on_item_found:
-                self.on_item_found(item)
-
-            time.sleep(self._scan_delay)
-            sub_items = self._scan_dfs(base_url, max_depth, full_path, full_path, depth + 1, raw_href=child_href)
-            items.extend(sub_items)
-
-        # 处理文件
+    def _emit_files(self, dir_path: str, files: list, items: list[DownloadItem], delay: float) -> None:
+        """批量输出文件项"""
         for name, file_url in files:
             if self._should_stop():
                 break
+            self._emit_file_item(dir_path, name, file_url, items, delay)
 
-            item_id = f"{dir_path}/{name}" if dir_path else name
-            item = self._create_item(
-                item_id=item_id,
-                name=name,
-                url=file_url,
-                item_type=ItemType.FILE,
-                parent_id=dir_path,
-                full_path=item_id,
-            )
-            items.append(item)
-
-            if self.on_item_found:
-                self.on_item_found(item)
-
-            time.sleep(self._scan_delay)
-
-        # 仅在无错误时标记为已扫描（错误时不标记，下次刷新可重试）
-        if not self._should_stop() and not has_error:
-            self._mark_dir_scanned(dir_path)
-
-        return items
-
-    # ==================== BFS 串行扫描 ====================
-
-    def _scan_bfs(
-        self, base_url: str, max_depth: int, dir_path: str = "", parent_id: str = "", depth: int = 0, raw_href: str = ""
+    def _traverse_serial(
+        self, base_url: str, scan_mode: str, max_depth: int, dir_path: str = "", parent_id: str = ""
     ) -> list[DownloadItem]:
-        """广度优先串行扫描（逐层扫描，先显示一级目录再逐层深入）"""
+        """串行遍历引擎（DFS 栈 / BFS 队列）"""
         all_items: list[DownloadItem] = []
-        queue: deque[tuple[str, str, int, str]] = deque()
-        queue.append((dir_path, parent_id, depth, raw_href))
+        is_dfs = scan_mode == "dfs"
+        worklist: deque = deque()
+        worklist.append(("dir", dir_path, parent_id, 0, ""))
 
-        while queue and not self._should_stop():
-            current_level: list[tuple[str, str, int, str]] = []
-            while queue:
-                current_level.append(queue.popleft())
+        while worklist and not self._should_stop():
+            task = worklist.pop() if is_dfs else worklist.popleft()
 
-            for current_path, _current_parent, current_depth, current_href in current_level:
+            # 文件输出任务（DFS 延后输出本目录文件）
+            if task[0] == "files":
+                self._emit_files(task[1], task[2], all_items, self._scan_delay)
+                continue
+
+            _, cur_path, _cur_parent, cur_depth, cur_href = task
+            if cur_depth >= max_depth:
+                continue
+            if cur_path and self._is_dir_scanned(cur_path):
+                continue
+
+            dirs, files, has_error = self.get_all_pages(base_url, cur_path, raw_href=cur_href)
+            is_empty = not dirs and not files
+            self._log_scan_result(cur_path, dirs, files, is_empty, has_error)
+
+            # 处理子目录并收集任务
+            children: list[tuple] = []
+            for full_path, name, child_href in dirs:
                 if self._should_stop():
                     break
-                if current_depth >= max_depth:
-                    continue
-                if current_path and self._is_dir_scanned(current_path):
+                self._emit_dir_item(full_path, name, cur_path, all_items, self._scan_delay)
+                children.append(("dir", full_path, full_path, cur_depth + 1, child_href))
+
+            if is_dfs:
+                # 栈：文件任务压栈底（子目录全部处理后输出），子目录反向压栈保持 DFS 顺序
+                worklist.append(("files", cur_path, files))
+                worklist.extend(reversed(children))
+            else:
+                # 队列：子目录先入队，本目录文件立即输出（逐层顺序）
+                worklist.extend(children)
+                self._emit_files(cur_path, files, all_items, self._scan_delay)
+
+            # 仅在无错误时标记为已扫描（错误时不标记，下次刷新可重试）
+            if not self._should_stop() and not has_error:
+                self._mark_dir_scanned(cur_path)
+
+        return all_items
+
+    def _traverse_parallel(
+        self,
+        base_url: str,
+        scan_mode: str,
+        max_depth: int,
+        max_workers: int = 3,
+        dir_path: str = "",
+        parent_id: str = "",
+    ) -> list[DownloadItem]:
+        """并行遍历引擎（DFS 栈 / BFS 队列 + in-flight 限流，真实并发）"""
+        all_items: list[DownloadItem] = []
+        is_dfs = scan_mode == "dfs"
+        worklist: deque = deque()
+        worklist.append(("dir", dir_path, parent_id, 0, ""))
+        root_dirs: list[str] = []  # 一级目录名（完成通知用）
+        executor = ThreadPoolExecutor(max_workers=max_workers)
+        try:
+            futures: dict = {}
+
+            while (worklist or futures) and not self._should_stop():
+                # 提交任务（in-flight ≤ max_workers，协调器不等待单个 future，实现真实并发）
+                while worklist and len(futures) < max_workers and not self._should_stop():
+                    task = worklist.pop() if is_dfs else worklist.popleft()
+
+                    # 文件输出任务无 I/O，直接执行
+                    if task[0] == "files":
+                        self._emit_files(task[1], task[2], all_items, 0)
+                        continue
+
+                    _, cur_path, _cur_parent, cur_depth, cur_href = task
+                    if cur_depth >= max_depth:
+                        continue
+                    if cur_path and self._is_dir_scanned(cur_path):
+                        continue
+                    future = executor.submit(self._get_all_pages_threadsafe, base_url, cur_path, cur_href)
+                    futures[future] = task
+
+                if not futures:
                     continue
 
-                dirs, files, has_error = self.get_all_pages(base_url, current_path, raw_href=current_href)
+                # 等待任一目录任务完成（轮询，及时响应取消/超时）
+                done_set, _ = wait(futures, timeout=0.05, return_when=FIRST_COMPLETED)
+                if not done_set:
+                    continue
+                done = done_set.pop()
+                task = futures.pop(done)
+                _, cur_path, _cur_parent, cur_depth, _cur_href = task
+
+                try:
+                    dirs, files, has_error = done.result()
+                except Exception as e:
+                    logger.error("扫描目录失败: %s -> %s", cur_path, e)
+                    self._emit_dir_complete()
+                    if self._scan_delay > 0:
+                        time.sleep(self._scan_delay)
+                    continue
+
                 is_empty = not dirs and not files
-                self._log_scan_result(current_path, dirs, files, is_empty, has_error)
+                self._log_scan_result(cur_path, dirs, files, is_empty, has_error)
 
-                # 处理子目录并加入队列
+                # 记录一级目录（根目录的子目录）
+                if cur_depth == 0:
+                    for _full_path, name, _href in dirs:
+                        root_dirs.append(name)
+
+                children: list[tuple] = []
                 for full_path, name, child_href in dirs:
                     if self._should_stop():
                         break
+                    self._emit_dir_item(full_path, name, cur_path, all_items, 0)
+                    children.append(("dir", full_path, full_path, cur_depth + 1, child_href))
 
-                    item = self._create_item(
-                        item_id=full_path,
-                        name=name,
-                        url="",
-                        item_type=ItemType.DIR,
-                        parent_id=current_path,
-                        full_path=full_path,
-                    )
-                    all_items.append(item)
+                if is_dfs:
+                    worklist.append(("files", cur_path, files))
+                    worklist.extend(reversed(children))
+                else:
+                    worklist.extend(children)
+                    self._emit_files(cur_path, files, all_items, 0)
 
-                    if self.on_item_found:
-                        self.on_item_found(item)
-
-                    queue.append((full_path, full_path, current_depth + 1, child_href))
-                    time.sleep(self._scan_delay)
-
-                # 处理文件
-                for name, file_url in files:
-                    if self._should_stop():
-                        break
-
-                    item_id = f"{current_path}/{name}" if current_path else name
-                    item = self._create_item(
-                        item_id=item_id,
-                        name=name,
-                        url=file_url,
-                        item_type=ItemType.FILE,
-                        parent_id=current_path,
-                        full_path=item_id,
-                    )
-                    all_items.append(item)
-
-                    if self.on_item_found:
-                        self.on_item_found(item)
-
-                    time.sleep(self._scan_delay)
-
-                # BFS即时标记：每个目录扫描完成后立即标记（错误时不标记）
                 if not self._should_stop() and not has_error:
-                    self._mark_dir_scanned(current_path)
-
-        return all_items
-
-    # ==================== DFS 并行扫描 ====================
-
-    def _scan_dfs_parallel(
-        self, base_url: str, max_depth: int, max_workers: int = 3, dir_path: str = "", parent_id: str = "", raw_href: str = ""
-    ) -> list[DownloadItem]:
-        """深度优先并行扫描（迭代实现，避免死锁）"""
-        all_items: list[DownloadItem] = []
-        items_lock = threading.Lock()
-        executor = ThreadPoolExecutor(max_workers=max_workers)
-
-        # DFS 栈: (dir_path, parent_id, depth, raw_href)
-        stack: deque[tuple[str, str, int, str]] = deque()
-        stack.append((dir_path, parent_id, 0, raw_href))
-
-        root_dirs: list[tuple[str, str]] = []
-
-        try:
-            while stack and not self._should_stop():
-                current_path, _current_parent, current_depth, current_href = stack.pop()
-
-                if current_depth >= max_depth:
-                    continue
-                if current_path and self._is_dir_scanned(current_path):
-                    continue
-
-                # 提交 I/O 到 worker（协调器等待，但协调器不是 worker）
-                future = executor.submit(self._get_all_pages_threadsafe, base_url, current_path, current_href)
-                try:
-                    dirs, files, has_error = future.result()
-                except Exception as e:
-                    logger.error("扫描目录失败: %s -> %s", current_path, e)
-                    self._emit_dir_complete()
-                    continue
-
-                is_empty = not dirs and not files
-                self._log_scan_result(current_path, dirs, files, is_empty, has_error)
-
-                # 处理文件
-                for name, file_url in files:
-                    if self._should_stop():
-                        break
-                    item_id = f"{current_path}/{name}" if current_path else name
-                    item = self._create_item(
-                        item_id=item_id,
-                        name=name,
-                        url=file_url,
-                        item_type=ItemType.FILE,
-                        parent_id=current_path,
-                        full_path=item_id,
-                    )
-                    with items_lock:
-                        all_items.append(item)
-                    if self.on_item_found:
-                        self.on_item_found(item)
-
-                # 处理子目录并压入栈（反转以保持 DFS 顺序）
-                for full_path, name, child_href in reversed(dirs):
-                    if self._should_stop():
-                        break
-                    item = self._create_item(
-                        item_id=full_path,
-                        name=name,
-                        url="",
-                        item_type=ItemType.DIR,
-                        parent_id=current_path,
-                        full_path=full_path,
-                    )
-                    with items_lock:
-                        all_items.append(item)
-                    if self.on_item_found:
-                        self.on_item_found(item)
-
-                    stack.append((full_path, full_path, current_depth + 1, child_href))
-                    if current_depth == 0:
-                        root_dirs.append((full_path, name))
-
-                # 标记已扫描（错误时不标记）
-                if not self._should_stop() and not has_error:
-                    self._mark_dir_scanned(current_path)
+                    self._mark_dir_scanned(cur_path)
 
                 self._emit_dir_complete()
+                # 每目录请求间隔，防止并发过高导致 503
+                if self._scan_delay > 0:
+                    time.sleep(self._scan_delay)
 
             # 一级目录完成通知
             if root_dirs and self.on_log:
-                names = [name for _, name in root_dirs]
-                self.on_log(f"✓ 一级目录扫描完成 ({len(names)} 个): " + ", ".join(names), "success")
+                self.on_log(f"✓ 一级目录扫描完成 ({len(root_dirs)} 个): " + ", ".join(root_dirs), "success")
         finally:
             executor.shutdown(wait=False)
 
         return all_items
-
-    # ==================== BFS 并行扫描 ====================
-
-    def _scan_bfs_parallel(
-        self, base_url: str, max_depth: int, max_workers: int = 3, dir_path: str = "", parent_id: str = "", raw_href: str = ""
-    ) -> list[DownloadItem]:
-        """广度优先并行扫描（逐层并行）"""
-        all_items: list[DownloadItem] = []
-        items_lock = threading.Lock()
-        queue: deque[tuple[str, str, int, str]] = deque()
-        queue.append((dir_path, parent_id, 0, raw_href))
-
-        executor = ThreadPoolExecutor(max_workers=max_workers)
-        try:
-            root_dirs: list[str] = []
-
-            while queue and not self._should_stop():
-                # 收集当前层任务
-                current_level: list[tuple[str, str, int, str]] = []
-                while queue:
-                    current_level.append(queue.popleft())
-
-                # 并行处理当前层
-                futures = {}
-                for path, pid, d, cur_href in current_level:
-                    if self._should_stop():
-                        break
-                    if d > max_depth:
-                        continue
-                    if path and self._is_dir_scanned(path):
-                        continue
-                    future = executor.submit(self._scan_single_dir_threadsafe, base_url, path, cur_href)
-                    futures[future] = (path, pid, d)
-
-                # 等待当前层完成
-                for future in as_completed(futures):
-                    if self._should_stop():
-                        break
-                    try:
-                        dirs, files, has_error = future.result()
-                        path, pid, d = futures[future]
-
-                        # 记录一级目录
-                        if d == 1 and path not in root_dirs:
-                            root_dirs.append(path)
-
-                        # 处理文件
-                        for name, file_url in files:
-                            if self._should_stop():
-                                break
-                            item_id = f"{path}/{name}" if path else name
-                            item = self._create_item(
-                                item_id=item_id,
-                                name=name,
-                                url=file_url,
-                                item_type=ItemType.FILE,
-                                parent_id=path,
-                                full_path=item_id,
-                            )
-                            with items_lock:
-                                all_items.append(item)
-                            if self.on_item_found:
-                                self.on_item_found(item)
-
-                        # 处理子目录并加入队列
-                        for full_path, name, child_href in dirs:
-                            if self._should_stop():
-                                break
-                            item = self._create_item(
-                                item_id=full_path,
-                                name=name,
-                                url="",
-                                item_type=ItemType.DIR,
-                                parent_id=path,
-                                full_path=full_path,
-                            )
-                            with items_lock:
-                                all_items.append(item)
-                            if self.on_item_found:
-                                self.on_item_found(item)
-                            queue.append((full_path, full_path, d + 1, child_href))
-
-                        # BFS即时标记：每个目录扫描完成后立即标记（错误时不标记）
-                        if not self._should_stop() and not has_error:
-                            self._mark_dir_scanned(path)
-
-                        # 输出当前目录的扫描日志
-                        is_empty = not dirs and not files
-                        self._log_scan_result(path, dirs, files, is_empty, has_error)
-
-                    except Exception as e:
-                        logger.error("并行扫描目录失败: %s", e)
-                    finally:
-                        self._emit_dir_complete()
-                        # 添加请求间隔，防止并发过高导致503
-                        if self._scan_delay > 0:
-                            time.sleep(self._scan_delay)
-
-                # 一层完成通知
-                if not self._should_stop() and root_dirs and not queue and self.on_log:
-                    root_names = [p.split("/")[-1] for p in root_dirs]
-                    self.on_log(f"✓ 一级目录扫描完成 ({len(root_names)} 个): " + ", ".join(root_names), "success")
-
-        finally:
-            executor.shutdown(wait=False)
-
-        return all_items
-
-    def _scan_single_dir_threadsafe(
-        self, base_url: str, dir_path: str, raw_href: str = ""
-    ) -> tuple[list[tuple[str, str, str]], list[tuple[str, str]]]:
-        """线程安全的扫描单个目录（用于并行 BFS）"""
-        return self._get_all_pages_threadsafe(base_url, dir_path, raw_href=raw_href)
 
     def close(self):
         """关闭session（原子，可重复调用）"""

@@ -69,3 +69,4 @@ class LogWidget(PlainTextEdit):
 
     def clear(self):
         super().clear()
+        self._messages.clear()

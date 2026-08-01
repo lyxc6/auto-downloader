@@ -28,15 +28,14 @@ class PageCache:
         full_url = f"{base_url}?dir={dir_path}" if dir_path else base_url
         return hashlib.md5(full_url.encode()).hexdigest()
 
-    def get_cached_page_info(
-        self, base_url: str, dir_path: str, html: str
-    ) -> tuple[int, bool]:
+    def get_cached_page_info(self, base_url: str, dir_path: str, html: str) -> tuple[int, bool]:
         """获取缓存的分页信息
 
         Returns:
             (total_pages, is_cache_hit)
         """
         from bs4 import BeautifulSoup
+
         soup = BeautifulSoup(html, "html.parser")
 
         cache_key = self._get_dir_cache_key(base_url, dir_path)
@@ -75,6 +74,7 @@ class PageCache:
         5. 默认 1
         """
         from bs4 import BeautifulSoup
+
         soup = BeautifulSoup(html, "html.parser")
 
         # 检查缓存
@@ -85,10 +85,7 @@ class PageCache:
                     # 验证缓存是否仍然有效（在锁外解析）
                     actual = self._parser.get_total_pages_from_soup(soup)
                     if actual != cached:
-                        logger.warning(
-                            "分页缓存不匹配: dir=%s, cached=%d, actual=%d",
-                            dir_path, cached, actual
-                        )
+                        logger.warning("分页缓存不匹配: dir=%s, cached=%d, actual=%d", dir_path, cached, actual)
                         # 更新缓存并返回实际值
                         self._page_cache[dir_path] = actual
                         return actual

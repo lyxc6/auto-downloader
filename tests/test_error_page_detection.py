@@ -106,7 +106,7 @@ class TestErrorPageDetectionIntegration:
 
     def test_get_all_pages_internal_detects_error(self, service):
         """测试 _get_all_pages_internal 检测错误页面"""
-        with patch.object(service, 'get_page') as mock_get:
+        with patch.object(service, "get_page") as mock_get:
             mock_get.return_value = """
             <div style="margin-bottom:15px;padding:10px;background:#f8d7da;color:#721c24;border-radius:4px;">
                 <strong>错误：</strong> XML Parsing Failed
@@ -123,7 +123,7 @@ class TestErrorPageDetectionIntegration:
 
     def test_normal_page_not_increment_counter(self, service):
         """测试正常页面不增加错误计数器"""
-        with patch.object(service, 'get_page') as mock_get:
+        with patch.object(service, "get_page") as mock_get:
             mock_get.return_value = """
             <div id="webdav-list">
                 <li style="margin:8px 0;"><a href="file1.txt">file1.txt</a></li>

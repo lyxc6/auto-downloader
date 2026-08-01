@@ -1,15 +1,15 @@
-"""扫描控制器"""
+"""扫描控制器：状态管理 + 信号桥 + 缓存决策（工作线程体见 ScanRunner，大小预取见 SizePrefetcher）"""
 
 import logging
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from time import monotonic
 
 from PySide6.QtCore import QObject, Signal
 
-from ..models import AppConfig, CacheManager, DownloadItem
+from ..models import AppConfig, CacheManager
 from ..services import ScanService
-from ..services.http_client import HttpClient
+from .scan_runner import ScanRunner
+from .size_prefetcher import SizePrefetcher
 
 logger = logging.getLogger(__name__)
 
@@ -44,15 +44,22 @@ class ScanController(QObject):
         # 刷新状态（scanned_dirs 备份，用于错误恢复）
         self._refresh_scanned_backup: set[str] | None = None
 
-        # 文件大小预取状态
-        self._prefetch_cancel_flag = threading.Event()
-        self._prefetch_thread: threading.Thread | None = None
+        # 本次扫描是否被中断（取消/超时），用于跳过完成后的副作用（如大小预取）
+        self._scan_interrupted = threading.Event()
+
+        # 文件大小预取
+        self._prefetch = SizePrefetcher(self.cache_manager, self.log_message.emit)
 
     @property
     def is_scanning(self) -> bool:
         """是否正在扫描"""
         with self._lock:
             return self._is_scanning
+
+    @property
+    def last_scan_interrupted(self) -> bool:
+        """本次扫描是否被中断（取消/超时）"""
+        return self._scan_interrupted.is_set()
 
     def _create_service(self) -> ScanService:
         """创建扫描服务"""
@@ -67,6 +74,15 @@ class ScanController(QObject):
         service.on_log = lambda msg, level: self.log_message.emit(msg, level)
 
         return service
+
+    def _create_runner(self) -> ScanRunner:
+        """创建扫描运行器（节流/计数/进度日志）"""
+        runner = ScanRunner(self.cache_manager, clock=monotonic)
+        runner.on_item_found_batch = lambda items: self.items_found.emit(items)
+        runner.on_progress = lambda files, dirs: self.scan_progress.emit(files, dirs)
+        runner.on_log = lambda msg, level: self.log_message.emit(msg, level)
+        runner.on_dir_scanned = lambda dp: self.dir_scanned.emit(dp)
+        return runner
 
     def start_scan(
         self,
@@ -91,6 +107,8 @@ class ScanController(QObject):
                 return
             self._is_scanning = True
 
+        self._scan_interrupted.clear()
+
         if max_depth is None:
             max_depth = self.config.max_depth
 
@@ -102,6 +120,7 @@ class ScanController(QObject):
         logger.info("开始扫描: %s (深度=%d, 模式=%s_%s)", url, max_depth, mode_str, scan_mode)
 
         def _scan_worker():
+            runner: ScanRunner | None = None
             try:
                 self._service = self._create_service()
                 self._service.parallel_mode = parallel
@@ -110,76 +129,9 @@ class ScanController(QObject):
                 if scanned_dirs:
                     self._service.set_scanned_dirs(scanned_dirs)
 
-                file_count = 0
-                dir_count = 0
-                dirs_found = 0
-                dirs_completed = 0
-                buffer: list[DownloadItem] = []
-                last_flush = monotonic()
-                last_progress_log = monotonic()
-                BATCH_SIZE = 50
-                FLUSH_INTERVAL = 0.1
-                PROGRESS_LOG_INTERVAL = 0.3
-                PROGRESS_DIR_INTERVAL = 5
-                _cb_lock = threading.Lock()
-
-                def on_item_found(item: DownloadItem):
-                    nonlocal file_count, dir_count, dirs_found, last_flush, buffer
-
-                    # 续扫去重：原子检查+添加，已存在的 item 不覆盖（避免并行竞态损坏 parent_id）
-                    if not self.cache_manager.try_add_item(item):
-                        return
-
-                    # 更新进展时间（无进展超时）
-                    self._service._update_progress()
-
-                    # 发现目录时标记为未完成（扫描完成后会由 on_dir_scanned 标记为已完成）
-                    if item.is_dir:
-                        self.cache_manager.mark_dir_unscanned(item.full_path)
-
-                    with _cb_lock:
-                        if item.is_file:
-                            file_count += 1
-                        else:
-                            dir_count += 1
-                            dirs_found += 1
-
-                        buffer.append(item)
-
-                        if len(buffer) >= BATCH_SIZE or (monotonic() - last_flush) >= FLUSH_INTERVAL:
-                            self.items_found.emit(list(buffer))
-                            self.scan_progress.emit(file_count, dir_count)
-                            buffer = []
-                            last_flush = monotonic()
-
-                def on_dir_scanned(dir_path: str):
-                    nonlocal dirs_completed, last_progress_log
-                    self.cache_manager.mark_dir_scanned(dir_path)
-                    self.dir_scanned.emit(dir_path)
-                    with _cb_lock:
-                        dirs_completed += 1
-                        now = monotonic()
-                        if (
-                            dirs_completed % PROGRESS_DIR_INTERVAL == 0
-                            or (now - last_progress_log) >= PROGRESS_LOG_INTERVAL
-                        ):
-                            # 提供更详细的进度信息
-                            if dirs_found > 0:
-                                percent = (dirs_completed / dirs_found) * 100
-                                self.log_message.emit(
-                                    f"扫描进度: {dirs_completed}/{dirs_found} 个目录 ({percent:.1f}%) | 发现 {file_count} 个文件",
-                                    "info",
-                                )
-                            else:
-                                self.log_message.emit(
-                                    f"扫描进度: 已完成 {dirs_completed} 个目录 | 发现 {file_count} 个文件",
-                                    "info",
-                                )
-                            last_progress_log = now
-
-                # 设置回调
-                self._service.on_item_found = on_item_found
-                self._service.on_dir_scanned = on_dir_scanned
+                runner = self._create_runner()
+                self._service.on_item_found = runner.handle_item
+                self._service.on_dir_scanned = runner.handle_dir_scanned
 
                 # 执行扫描
                 _ = self._service.scan(
@@ -191,24 +143,25 @@ class ScanController(QObject):
                 )
 
                 # flush 剩余 buffer
-                with _cb_lock:
-                    if buffer:
-                        self.items_found.emit(list(buffer))
-                        self.scan_progress.emit(file_count, dir_count)
-                        buffer = []
+                runner.flush()
 
                 # 检查是否因超时停止
                 if self._service.is_timeout():
+                    self._scan_interrupted.set()
                     self.log_message.emit("扫描超时，已自动停止", "warning")
-                    self.log_message.emit(f"已扫描: 文件 {file_count}, 目录 {dir_count}（已保存）", "info")
+                    self.log_message.emit(
+                        f"已扫描: 文件 {runner.file_count}, 目录 {runner.dir_count}（已保存）", "info"
+                    )
                 # 检查是否因取消停止
                 elif self._service.is_cancelled():
+                    self._scan_interrupted.set()
                     self.log_message.emit("扫描已取消", "warning")
                 else:
                     # 扫描进度汇总
                     if parallel:
                         self.log_message.emit(
-                            f"扫描进度: 全部完成 {dirs_completed} 个目录 | 发现 {file_count} 个文件", "success"
+                            f"扫描进度: 全部完成 {runner.dirs_completed} 个目录 | 发现 {runner.file_count} 个文件",
+                            "success",
                         )
 
                 # 标记扫描完成状态（仅在正常完成时）
@@ -216,29 +169,31 @@ class ScanController(QObject):
                     self.cache_manager.set_scan_complete(True)
 
                 # 扫描完成
-                self.scan_completed.emit(file_count, dir_count, "")
+                self.scan_completed.emit(runner.file_count, runner.dir_count, "")
 
-                logger.info("扫描完成: 文件=%d 目录=%d", file_count, dir_count)
+                logger.info("扫描完成: 文件=%d 目录=%d", runner.file_count, runner.dir_count)
 
                 self.log_message.emit("", "info")
                 self.log_message.emit("=" * 50, "header")
                 self.log_message.emit("扫描完成！", "success")
-                self.log_message.emit(f"文件: {file_count}, 目录: {dir_count}", "info")
+                self.log_message.emit(f"文件: {runner.file_count}, 目录: {runner.dir_count}", "info")
                 # 显示失败统计
-                if self._service._failed_dirs > 0:
+                failed_dirs = self._service.get_failed_dirs_count()
+                if failed_dirs > 0:
                     self.log_message.emit(
-                        f"注意: {self._service._failed_dirs} 个目录因服务器错误未获取到内容",
+                        f"注意: {failed_dirs} 个目录因服务器错误未获取到内容",
                         "warning",
                     )
-                if self._service.get_error_dirs_count() > 0:
+                error_dirs = self._service.get_error_dirs_count()
+                if error_dirs > 0:
                     self.log_message.emit(
-                        f"注意: {self._service.get_error_dirs_count()} 个目录因服务器错误返回空内容",
+                        f"注意: {error_dirs} 个目录因服务器错误返回空内容",
                         "warning",
                     )
                 self.log_message.emit("=" * 50, "header")
 
                 # 内部处理（刷新分支清理等）
-                self._on_scan_completed_internal(file_count, dir_count)
+                self._on_scan_completed_internal(runner.file_count, runner.dir_count)
 
             except Exception as e:
                 logger.error("扫描失败", exc_info=True)
@@ -256,7 +211,9 @@ class ScanController(QObject):
         self._thread = threading.Thread(target=_scan_worker, daemon=True)
         self._thread.start()
 
-    def start_directory_scan(self, base_url: str, dir_path: str, parent_id: str, scan_mode: str = "dfs", parallel: bool = False):
+    def start_directory_scan(
+        self, base_url: str, dir_path: str, parent_id: str, scan_mode: str = "dfs", parallel: bool = False
+    ):
         """扫描单个目录（不递归到根，只扫描指定目录及其子目录）
 
         Args:
@@ -272,49 +229,21 @@ class ScanController(QObject):
                 return
             self._is_scanning = True
 
+        self._scan_interrupted.clear()
+
         self.log_message.emit(f"刷新目录: {dir_path or '/'}", "header")
         logger.info("开始单目录扫描: %s (dir=%s)", base_url, dir_path)
 
         def _dir_scan_worker():
+            runner: ScanRunner | None = None
             try:
                 self._service = self._create_service()
-
-                file_count = 0
-                dir_count = 0
-                buffer: list[DownloadItem] = []
-                last_flush = monotonic()
-                BATCH_SIZE = 50
-                FLUSH_INTERVAL = 0.1
-                _cb_lock = threading.Lock()
-
-                def on_item_found(item: DownloadItem):
-                    nonlocal file_count, dir_count, last_flush, buffer
-                    if not self.cache_manager.try_add_item(item):
-                        return
-                    # 发现目录时标记为未完成
-                    if item.is_dir:
-                        self.cache_manager.mark_dir_unscanned(item.full_path)
-                    with _cb_lock:
-                        if item.is_file:
-                            file_count += 1
-                        else:
-                            dir_count += 1
-                        buffer.append(item)
-                        if len(buffer) >= BATCH_SIZE or (monotonic() - last_flush) >= FLUSH_INTERVAL:
-                            self.items_found.emit(list(buffer))
-                            self.scan_progress.emit(file_count, dir_count)
-                            buffer = []
-                            last_flush = monotonic()
-
-                self._service.on_item_found = on_item_found
-
-                def on_dir_scanned_single(dp: str):
-                    self.cache_manager.mark_dir_scanned(dp)
-                    self.dir_scanned.emit(dp)
-
-                self._service.on_dir_scanned = on_dir_scanned_single
-
                 self._service.parallel_mode = parallel
+
+                runner = self._create_runner()
+                self._service.on_item_found = runner.handle_item
+                self._service.on_dir_scanned = runner.handle_dir_scanned
+
                 self._service.scan(
                     base_url,
                     scan_mode=scan_mode,
@@ -324,16 +253,16 @@ class ScanController(QObject):
                     max_depth=self.config.max_depth,
                 )
 
-                with _cb_lock:
-                    if buffer:
-                        self.items_found.emit(list(buffer))
-                        self.scan_progress.emit(file_count, dir_count)
-                        buffer = []
+                runner.flush()
 
-                self.scan_completed.emit(file_count, dir_count, dir_path)
-                logger.info("单目录扫描完成: 文件=%d 目录=%d", file_count, dir_count)
+                if self._service.is_timeout() or self._service.is_cancelled():
+                    self._scan_interrupted.set()
+                    self.log_message.emit("目录刷新已取消", "warning")
 
-                self.log_message.emit(f"目录刷新完成: 文件 {file_count}, 目录 {dir_count}", "success")
+                self.scan_completed.emit(runner.file_count, runner.dir_count, dir_path)
+                logger.info("单目录扫描完成: 文件=%d 目录=%d", runner.file_count, runner.dir_count)
+
+                self.log_message.emit(f"目录刷新完成: 文件 {runner.file_count}, 目录 {runner.dir_count}", "success")
                 self.cache_manager.save()
 
             except Exception as e:
@@ -376,68 +305,16 @@ class ScanController(QObject):
             max_workers: 并行线程数
             dir_path: 指定目录路径（空=预取全部，非空=只预取该目录下的文件）
         """
-        # 防重复：如果已有 prefetch 在运行，先取消它
-        if self._prefetch_thread and self._prefetch_thread.is_alive():
-            logger.info("取消正在运行的文件大小预取任务")
-            self.cancel_size_prefetch()
-            self._prefetch_thread.join(timeout=2)
-
-        # 收集需要预取大小的文件
-        files_to_prefetch = [
-            item for item in self.cache_manager.get_all_items()
-            if item.is_file and item.size <= 0 and item.url
-            and (not dir_path or item.full_path.startswith(dir_path + "/"))
-        ]
-
-        if not files_to_prefetch:
-            return
-
-        self._prefetch_cancel_flag.clear()
-        total = len(files_to_prefetch)
-        self.log_message.emit(f"正在获取文件大小... (0/{total})", "info")
-
-        def _prefetch_worker():
-            completed = 0
-            http_client = HttpClient()
-            try:
-                def head_one(item: DownloadItem) -> tuple[str, int | None]:
-                    if self._prefetch_cancel_flag.is_set():
-                        return (item.item_id, None)
-                    size = http_client.head_file_size(item.url, retries=2)
-                    return (item.item_id, size)
-
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    futures = {
-                        executor.submit(head_one, item): item
-                        for item in files_to_prefetch
-                    }
-                    for future in as_completed(futures):
-                        if self._prefetch_cancel_flag.is_set():
-                            executor.shutdown(wait=False, cancel_futures=True)
-                            break
-                        item_id, size = future.result()
-                        completed += 1
-                        if size is not None and size > 0:
-                            self.cache_manager.update_item_size(item_id, size)
-                            self.size_prefetch_progress.emit(item_id, size)
-                        if completed % 20 == 0 or completed == total:
-                            self.log_message.emit(
-                                f"正在获取文件大小... ({completed}/{total})", "info"
-                            )
-            except Exception as e:
-                logger.error("文件大小预取失败", exc_info=True)
-                self.log_message.emit(f"文件大小预取失败: {e}", "error")
-            finally:
-                http_client.close()
-                self.cache_manager.save()
-                self.size_prefetch_completed.emit()
-
-        self._prefetch_thread = threading.Thread(target=_prefetch_worker, daemon=True)
-        self._prefetch_thread.start()
+        self._prefetch.start(
+            max_workers=max_workers,
+            dir_path=dir_path,
+            on_progress=lambda item_id, size: self.size_prefetch_progress.emit(item_id, size),
+            on_completed=self.size_prefetch_completed.emit,
+        )
 
     def cancel_size_prefetch(self):
         """取消文件大小预取"""
-        self._prefetch_cancel_flag.set()
+        self._prefetch.cancel()
 
     def start_scan_with_cache(self, url: str, scan_mode: str = "dfs", parallel: bool = False):
         """智能扫描：自动处理缓存逻辑
@@ -446,6 +323,8 @@ class ScanController(QObject):
         - 有缓存但扫描未完成 → 断点续扫
         - 无缓存 → 新扫描
         """
+        self._scan_interrupted.clear()
+
         # 相同URL且有缓存数据
         if self.cache_manager.has_data_for(url):
             logger.info("使用缓存数据恢复目录树: %s", url)
@@ -502,16 +381,21 @@ class ScanController(QObject):
 
         self.start_scan(url, scan_mode=scan_mode, parallel=parallel)
 
-    def start_directory_refresh(self, base_url: str, item_id: str, item_full_path: str, item_parent_id: str, scan_mode: str = "dfs", parallel: bool = False):
+    def start_directory_refresh(
+        self,
+        base_url: str,
+        item_id: str,
+        item_full_path: str,
+        item_parent_id: str,
+        scan_mode: str = "dfs",
+        parallel: bool = False,
+    ):
         """刷新单个目录（清除其子项，重新扫描该目录）"""
         if not base_url:
             self.log_message.emit("无有效URL，请先执行一次扫描", "error")
             return
 
         logger.info("刷新单个目录: %s (path=%s)", item_id, item_full_path)
-
-        # 通知视图层移除子节点
-        _removed_ids = set()  # 视图层负责实际移除
 
         # 清理缓存中的子节点
         self.cache_manager.remove_directory_descendants(item_id)
