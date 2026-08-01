@@ -1,20 +1,20 @@
 """scan_completed 信号契约回归测试 (P0-1)
 
 验证:
-- app 的 _on_scan_completed 槽函数签名可接收信号的全部 3 个参数 (files, dirs, dir_path)
+- presenter 的 _on_scan_completed 槽函数签名可接收信号的全部 3 个参数 (files, dirs, dir_path)
 - 真实控制器发射 scan_completed 不因参数不匹配抛 TypeError
 """
 
 import inspect
 
-from src.app import Application
 from src.controllers.scan_controller import ScanController
 from src.models import AppConfig, CacheManager
+from src.presenters import ScanPresenter
 
 
-def test_app_handler_signature_accepts_three_args():
+def test_presenter_handler_signature_accepts_three_args():
     """_on_scan_completed 参数数必须 >= 信号参数数 (files, dirs, dir_path)"""
-    params = inspect.signature(Application._on_scan_completed).parameters
+    params = inspect.signature(ScanPresenter._on_scan_completed).parameters
     assert len(params) >= 3, f"_on_scan_completed 参数不足: {list(params)}"
 
 

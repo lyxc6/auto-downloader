@@ -20,7 +20,6 @@ class DownloadController(QObject):
     progress_updated = Signal(str, int, int)  # item_id, downloaded, total
     status_changed = Signal(str, str)  # item_id, status
     error_occurred = Signal(str, str)  # item_id, error_message
-    item_completed = Signal(str)  # item_id
     batch_completed = Signal(dict)  # stats_dict
     log_message = Signal(str, str)  # message, level
     download_validated = Signal(list)  # List[DownloadItem]（验证通过）
@@ -57,7 +56,6 @@ class DownloadController(QObject):
         service.on_progress = lambda id, dl, total: self.progress_updated.emit(id, dl, total)
         service.on_status_changed = lambda id, status: self.status_changed.emit(id, status.value)
         service.on_error = lambda id, msg: self.error_occurred.emit(id, msg)
-        service.on_complete = lambda id: self.item_completed.emit(id)
 
         return service
 

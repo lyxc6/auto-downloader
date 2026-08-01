@@ -31,6 +31,7 @@ class DownloadPanel(QWidget):
     refresh_requested = Signal(str)  # 强制刷新url
     refresh_directory_requested = Signal(str)  # item_id：刷新单个目录
     download_requested = Signal()  # 开始下载
+    checked_changed = Signal(set)  # 勾选集合变化（来自树控件实时同步）
 
     def __init__(self, config: AppConfig, parent: QWidget | None = None):
         super().__init__(parent)
@@ -190,6 +191,7 @@ class DownloadPanel(QWidget):
         self.expand_btn.clicked.connect(self.tree_widget.expand_all_items)
         self.collapse_btn.clicked.connect(self.tree_widget.collapse_all_items)
         self.tree_widget.refresh_dir_requested.connect(self.refresh_directory_requested)
+        self.tree_widget.checked_ids_changed.connect(self.checked_changed)
 
     def _on_scan_clicked(self):
         """扫描按钮点击"""
@@ -286,7 +288,3 @@ class DownloadPanel(QWidget):
     def get_checked_files(self) -> list[DownloadItem]:
         """获取勾选的文件列表"""
         return self.tree_widget.get_checked_files()
-
-    def set_check_sync_callback(self, cb) -> None:
-        """注册勾选状态同步回调"""
-        self.tree_widget.set_check_sync_callback(cb)

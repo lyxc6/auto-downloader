@@ -51,9 +51,6 @@ class ScanService:
 
         # 并行模式控制
         self.parallel_mode = False
-        self.on_progress_update: Callable[[int, int], None] | None = None
-        self._parallel_dirs_completed = 0
-        self._progress_lock = threading.Lock()
 
         # 注入取消标志到http_client
         self._http_client.set_cancel_flag(self._cancel_flag)
@@ -91,7 +88,6 @@ class ScanService:
         """重置状态"""
         self._cancel_flag.clear()
         self._start_time = time.monotonic()
-        self._parallel_dirs_completed = 0
         self._http_client.reset_progress()
 
     def set_scanned_dirs(self, dirs: set[str]):
@@ -156,16 +152,6 @@ class ScanService:
             self._scanned_dirs.add(dir_path)
         if self.on_dir_scanned:
             self.on_dir_scanned(dir_path)
-
-    def _emit_dir_complete(self):
-        """并行模式下，每完成一个目录递增计数器并触发进度回调"""
-        if not self.parallel_mode:
-            return
-        with self._progress_lock:
-            self._parallel_dirs_completed += 1
-            count = self._parallel_dirs_completed
-        if self.on_progress_update:
-            self.on_progress_update(count, 0)
 
     def _should_stop(self) -> bool:
         """检查是否应该停止扫描（取消或超时）"""
@@ -638,7 +624,6 @@ class ScanService:
                     dirs, files, has_error = done.result()
                 except Exception as e:
                     logger.error("扫描目录失败: %s -> %s", cur_path, e)
-                    self._emit_dir_complete()
                     if self._scan_delay > 0:
                         time.sleep(self._scan_delay)
                     continue
@@ -668,7 +653,6 @@ class ScanService:
                 if not self._should_stop() and not has_error:
                     self._mark_dir_scanned(cur_path)
 
-                self._emit_dir_complete()
                 # 每目录请求间隔，防止并发过高导致 503
                 if self._scan_delay > 0:
                     time.sleep(self._scan_delay)

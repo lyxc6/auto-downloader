@@ -1,4 +1,4 @@
-"""应用主类：组合根 + 信号接线 + 扫描/下载回调（更新流程见 UpdateFlow）"""
+"""应用主类：组合根 + 信号接线 + 关停管理（扫描/下载流程见 presenters，更新流程见 UpdateFlow）"""
 
 import logging
 import signal
@@ -12,7 +12,8 @@ from qfluentwidgets import InfoBar, InfoBarPosition
 
 from . import __version__
 from .controllers import DownloadController, ScanController
-from .models import AppConfig, CacheManager, DownloadItem
+from .models import AppConfig, CacheManager
+from .presenters import AutoSavePolicy, DownloadPresenter, ScanPresenter
 from .services import UpdateChecker, cleanup_old_exe
 from .update_flow import UpdateFlow
 from .utils.logger import setup_logging
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 class Application:
-    """应用主类"""
+    """应用主类：组合根 + 信号接线 + 关停管理"""
 
     def __init__(self):
         # 初始化日志
@@ -58,7 +59,26 @@ class Application:
         self.update_checker = UpdateChecker()
         self._update_flow = UpdateFlow(self.config, self.window, self.window.settingsPanel, self.update_checker)
 
-        # 连接信号
+        # 自动保存策略（扫描/下载任一活动进行中每 30s 保存缓存）
+        self._auto_save = AutoSavePolicy(
+            save=self.cache_manager.save,
+            is_busy=lambda: self.scan_controller.is_scanning or self.download_controller.is_downloading,
+        )
+
+        # 创建流程 presenter（扫描/下载视图状态转换与副作用）
+        self.scan_presenter = ScanPresenter(
+            self.config, self.cache_manager, self.scan_controller, self.window.downloadPanel, self._auto_save
+        )
+        self.download_presenter = DownloadPresenter(
+            self.config,
+            self.cache_manager,
+            self.download_controller,
+            self.window.downloadPanel,
+            self.window.queuePanel,
+            self._auto_save,
+        )
+
+        # 连接剩余信号（设置面板 / 更新流程 / 关停）
         self._connect_signals()
 
         # SIGINT 安全化：信号处理器只置位事件，由主线程定时器轮询处理
@@ -68,53 +88,8 @@ class Application:
         signal.signal(signal.SIGINT, self._signal_handler)
         self._start_shutdown_poller()
 
-        self._auto_save_timer = QTimer(self.window)
-        self._auto_save_timer.setInterval(30000)
-        self._auto_save_timer.timeout.connect(self.cache_manager.save)
-
-        # URL 输入防抖定时器（用于更新扫描按钮状态）
-        self._scan_button_debounce_timer = QTimer(self.window)
-        self._scan_button_debounce_timer.setSingleShot(True)
-        self._scan_button_debounce_timer.setInterval(500)
-        self._scan_button_debounce_timer.timeout.connect(self._update_scan_button)
-
     def _connect_signals(self):
-        """连接信号"""
-        # 下载面板信号
-        download_panel = self.window.downloadPanel
-
-        # 扫描信号：视图层 → 控制器
-        download_panel.scan_requested.connect(self._on_scan_requested)
-        download_panel.refresh_requested.connect(self._on_refresh_requested)
-        download_panel.refresh_directory_requested.connect(self._on_directory_refresh_requested)
-        download_panel.stop_scan_btn.clicked.connect(self.scan_controller.cancel_scan)
-
-        # 下载信号：视图层 → 控制器
-        download_panel.download_requested.connect(self._on_download_requested)
-        download_panel.stop_download_btn.clicked.connect(self.download_controller.cancel_download)
-
-        # 控制器信号 → 视图层
-        self.scan_controller.items_found.connect(download_panel.add_items_batch)
-        self.scan_controller.log_message.connect(download_panel.add_log)
-        self.scan_controller.scan_progress.connect(self._on_scan_progress)
-        self.scan_controller.scan_completed.connect(self._on_scan_completed)
-        self.scan_controller.scan_error.connect(self._on_scan_error)
-        self.scan_controller.dir_scanned.connect(download_panel.apply_dir_scanned)
-
-        # 缓存相关信号
-        self.scan_controller.cache_load_completed.connect(self._on_cache_load_completed)
-
-        # 文件大小预取信号
-        self.scan_controller.size_prefetch_progress.connect(self._on_size_prefetch_progress)
-        self.scan_controller.size_prefetch_completed.connect(self._on_size_prefetch_completed)
-
-        self.download_controller.log_message.connect(download_panel.add_log)
-        self.download_controller.progress_updated.connect(self._on_download_progress)
-        self.download_controller.status_changed.connect(self._on_download_status)
-        self.download_controller.batch_completed.connect(self._on_download_completed)
-        self.download_controller.download_validated.connect(self._on_download_validated)
-        self.download_controller.error_occurred.connect(lambda _item_id, msg: download_panel.add_log(msg, "error"))
-
+        """连接信号（扫描/下载流程信号已由各 presenter 自行接线）"""
         # 设置面板信号
         self.window.settingsPanel.theme_changed.connect(self.window.apply_theme)
         self.window.settingsPanel.config_changed.connect(self._on_config_changed)
@@ -123,223 +98,6 @@ class Application:
 
         # 更新检查器信号 → 更新流程
         self._update_flow.connect_signals()
-
-        download_panel.set_check_sync_callback(self._on_checked_changed)
-
-        # URL 输入变化 → 防抖更新扫描按钮状态
-        download_panel.url_input.textChanged.connect(self._on_url_text_changed)
-
-    def _start_auto_save(self):
-        self._auto_save_timer.start()
-
-    def _stop_auto_save_if_idle(self):
-        if not self.scan_controller.is_scanning and not self.download_controller.is_downloading:
-            self._auto_save_timer.stop()
-
-    def _on_checked_changed(self, checked_ids: set[str]) -> None:
-        """勾选状态变化：同步到缓存并实时更新已选统计"""
-        self.cache_manager.set_checked_items(checked_ids)
-        stats = self.cache_manager.get_stats()
-        self.window.downloadPanel.update_stats(stats["total_files"], stats["total_dirs"], stats["checked_count"])
-
-    def _on_url_text_changed(self):
-        """URL 输入变化防抖 → 更新扫描按钮状态"""
-        self._scan_button_debounce_timer.start()
-
-    def _update_scan_button(self):
-        """根据缓存状态更新扫描按钮文字（扫描目录 / 继续扫描）"""
-        url = self.window.downloadPanel.url_input.text().strip()
-        has_cache = self.cache_manager.has_data_for(url)
-        scan_done = self.cache_manager.is_scan_complete()
-        self.window.downloadPanel.set_scan_button_mode(has_cache and not scan_done)
-
-    def _auto_load_cache(self):
-        """启动时自动加载缓存目录树到 UI"""
-        url = self.config.last_url
-        if url and self.cache_manager.has_data_for(url):
-            logger.info("启动时自动加载缓存: %s", url)
-            self.scan_controller.cache_load_completed.emit(
-                self.cache_manager.get_tree_data_snapshot(), self.cache_manager.checked_items
-            )
-
-    # ==================== 扫描相关回调 ====================
-
-    def _on_scan_requested(self, url: str):
-        """扫描请求处理"""
-        if self.scan_controller.is_scanning:
-            return
-
-        self.config.last_url = url
-        self.config.save()
-
-        self.window.downloadPanel.log_widget.clear()
-        self.window.downloadPanel.set_scanning(True)
-        self.window.downloadPanel.download_btn.setEnabled(False)
-        self._start_auto_save()
-
-        # 默认启用并行扫描（scan_max_workers > 1 时）
-        parallel = self.config.scan_max_workers > 1
-        self.scan_controller.start_scan_with_cache(url, self.config.scan_mode, parallel=parallel)
-
-    def _on_refresh_requested(self, url: str):
-        """刷新请求处理"""
-        if self.scan_controller.is_scanning:
-            return
-
-        # 清除 Widget 内部数据，防止僵尸节点残留
-        checked_backup = set(self.cache_manager.checked_items)
-        self.window.downloadPanel.prepare_refresh(checked_backup)
-
-        self.config.last_url = url
-        self.config.save()
-
-        self.window.downloadPanel.log_widget.clear()
-        self.window.downloadPanel.set_scanning(True)
-        self.window.downloadPanel.download_btn.setEnabled(False)
-        self._start_auto_save()
-
-        # 默认启用并行扫描
-        parallel = self.config.scan_max_workers > 1
-        self.scan_controller.start_refresh(url, self.config.scan_mode, parallel=parallel)
-
-    def _on_directory_refresh_requested(self, item_id: str):
-        """目录刷新请求处理"""
-        item = self.cache_manager.get_item(item_id)
-        if item is None or not item.is_dir:
-            return
-
-        base_url = self.cache_manager.url
-        if not base_url:
-            InfoBar.error(
-                title="错误", content="无有效URL，请先执行一次扫描", parent=self.window, position=InfoBarPosition.TOP
-            )
-            return
-
-        # 删除子节点
-        self.window.downloadPanel.prepare_directory_refresh(item_id)
-
-        # 更新统计
-        stats = self.cache_manager.get_stats()
-        self.window.downloadPanel.update_stats(stats["total_files"], stats["total_dirs"], stats["checked_count"])
-
-        self.window.downloadPanel.set_scanning(True)
-        self.window.downloadPanel.download_btn.setEnabled(False)
-        self._start_auto_save()
-
-        parallel = self.config.scan_max_workers > 1
-        self.scan_controller.start_directory_refresh(
-            base_url, item_id, item.full_path, item.parent_id, self.config.scan_mode, parallel=parallel
-        )
-
-    def _on_cache_load_completed(self, tree_data: dict, checked_items: set):
-        """缓存加载完成：更新视图层"""
-        self.window.downloadPanel.apply_cache_loaded(tree_data, checked_items)
-
-        stats = self.cache_manager.get_stats()
-        self.window.downloadPanel.update_stats(stats["total_files"], stats["total_dirs"], stats["checked_count"])
-        self.window.downloadPanel.download_btn.setEnabled(stats["total_files"] > 0)
-        self._update_scan_button()
-
-        # 显示目录扫描状态
-        self.window.downloadPanel.apply_scan_status(self.cache_manager.get_unscanned_dirs())
-
-    def _on_scan_progress(self, files: int, dirs: int):
-        """扫描进度更新"""
-        self.window.downloadPanel.update_stats(files, dirs, len(self.cache_manager.checked_items))
-
-    def _on_scan_completed(self, file_count: int, dir_count: int, dir_path: str = ""):
-        """扫描完成"""
-        self.window.downloadPanel.set_scanning(False)
-        self.window.downloadPanel.download_btn.setEnabled(file_count > 0)
-
-        # 更新统计
-        stats = self.cache_manager.get_stats()
-        self.window.downloadPanel.update_stats(stats["total_files"], stats["total_dirs"], stats["checked_count"])
-
-        self._stop_auto_save_if_idle()
-        self._update_scan_button()
-
-        # 刷新目录扫描状态
-        self.window.downloadPanel.apply_scan_status(self.cache_manager.get_unscanned_dirs())
-
-        # 扫描完成后启动文件大小预取（并行HEAD请求，目录刷新时仅预取该目录；取消/超时不预取）
-        if file_count > 0 and not self.scan_controller.last_scan_interrupted:
-            self.scan_controller.start_size_prefetch(max_workers=self.config.scan_max_workers, dir_path=dir_path)
-
-    def _on_scan_error(self, error_msg: str):
-        """扫描失败"""
-        self.window.downloadPanel.set_scanning(False)
-        self._stop_auto_save_if_idle()
-        InfoBar.warning(
-            title="扫描失败",
-            content=error_msg,
-            position=InfoBarPosition.TOP_RIGHT,
-            isClosable=True,
-            duration=5000,
-            parent=self.window,
-        )
-
-    def _on_size_prefetch_progress(self, item_id: str, size: int):
-        """文件大小预取进度：更新单个节点的大小显示"""
-        self.window.downloadPanel.update_item_size(item_id)
-
-    def _on_size_prefetch_completed(self):
-        """文件大小预取完成"""
-        self._stop_auto_save_if_idle()
-        stats = self.cache_manager.get_stats()
-        self.window.downloadPanel.update_stats(stats["total_files"], stats["total_dirs"], stats["checked_count"])
-
-    # ==================== 下载相关回调 ====================
-
-    def _on_download_requested(self):
-        """下载请求处理"""
-        # 从目录树取勾选文件
-        checked_files = self.window.downloadPanel.get_checked_files()
-
-        if not checked_files:
-            InfoBar.warning(
-                title="警告", content="请先选择要下载的文件", parent=self.window, position=InfoBarPosition.TOP
-            )
-            return
-
-        # 重置批次进度累计，用于底部总进度条
-        self._dl_progress: dict[str, tuple[int, int]] = {}
-
-        # 设置下载状态
-        self.window.downloadPanel.set_downloading(True)
-        self._start_auto_save()
-
-        # 调用控制器（带验证）
-        self.download_controller.start_download_with_validation(checked_files)
-
-    def _on_download_validated(self, checked_files: list[DownloadItem]):
-        """下载验证通过：添加到队列"""
-        for item in checked_files:
-            self.window.queuePanel.add_item(item.item_id, item.name)
-
-    def _on_download_progress(self, item_id: str, downloaded: int, total_size: int):
-        """下载进度更新"""
-        self.window.queuePanel.update_progress(item_id, downloaded, total_size)
-
-        # 累计各文件进度，驱动底部总进度条
-        self._dl_progress[item_id] = (downloaded, total_size)
-        sum_downloaded = sum(d for d, _ in self._dl_progress.values())
-        sum_total = sum(t for _, t in self._dl_progress.values())
-        self.window.downloadPanel.update_progress(sum_downloaded, sum_total)
-
-    def _on_download_status(self, item_id: str, status: str):
-        """下载状态更新"""
-        self.window.queuePanel.update_status(item_id, status)
-
-    def _on_download_completed(self, stats_dict: dict[str, Any]) -> None:
-        """下载完成"""
-        self.window.downloadPanel.set_downloading(False)
-        # 批次结束将总进度条置满（随后 set_downloading(False) 会隐藏它）
-        self.window.downloadPanel.update_progress(1, 1)
-        self._dl_progress = {}
-        self.cache_manager.save()
-        logger.info("下载完成，缓存已保存")
-        self._stop_auto_save_if_idle()
 
     # ==================== 关停处理 ====================
 
@@ -356,30 +114,39 @@ class Application:
         self._shutdown_timer = timer
 
     def _check_shutdown(self):
-        """主线程回调：事件置位时保存缓存、关闭服务、退出应用（幂等）"""
-        if self._shutdown_done:
-            return
+        """主线程回调：事件置位时执行统一退出序列并退出事件循环（幂等）"""
         if not self._shutdown_event.is_set():
             return
+        if self._shutdown():
+            self.app.quit()
+
+    def _on_app_closing(self):
+        """窗口关闭：执行统一退出序列（事件循环随后自然结束）"""
+        logger.info("窗口关闭，执行退出序列...")
+        self._shutdown()
+
+    def _shutdown(self) -> bool:
+        """统一退出序列：保存缓存 → 取消进行中任务 → 关闭服务（幂等，主线程调用）
+
+        Returns:
+            True 表示本次执行了退出序列（重复调用返回 False）
+        """
+        if self._shutdown_done:
+            return False
         self._shutdown_done = True
         if self._shutdown_timer is not None:
             self._shutdown_timer.stop()
-        logger.info("收到退出信号，保存缓存...")
-        self.cache_manager.save()
-        self.scan_controller.close_service()
-        self.download_controller.close_service()
-        logger.info("应用退出")
-        self.app.quit()
-
-    def _on_app_closing(self):
-        """应用关闭前保存"""
-        logger.info("窗口关闭，保存缓存...")
+        logger.info("应用退出，保存缓存...")
         self.cache_manager.save()
         self.scan_controller.cancel_size_prefetch()
         self.scan_controller.cancel_scan()
         self.download_controller.cancel_download()
         self.scan_controller.close_service()
         self.download_controller.close_service()
+        logger.info("应用服务已关闭")
+        return True
+
+    # ==================== 配置变更 ====================
 
     def _on_config_changed(self, changes: dict[str, Any]) -> None:
         """配置变更通知：设置已保存，下一批次下载/扫描生效"""
@@ -405,8 +172,8 @@ class Application:
         cleanup_old_exe()
 
         # 启动时自动加载缓存目录树
-        self._auto_load_cache()
-        self._update_scan_button()
+        self.scan_controller.load_cache_into_ui(self.config.last_url)
+        self.scan_presenter.update_scan_button()
 
         # 启动时自动检查更新
         if self.config.auto_check_update:

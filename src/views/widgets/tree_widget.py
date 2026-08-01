@@ -1,7 +1,6 @@
 """树形组件扩展"""
 
 from collections import deque
-from collections.abc import Callable
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QTreeWidgetItem
@@ -15,6 +14,7 @@ class DownloadTreeWidget(TreeWidget):
     """下载树形组件（虚拟加载）"""
 
     refresh_dir_requested = Signal(str)
+    checked_ids_changed = Signal(set)  # 勾选集合变化（实时同步）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -25,7 +25,6 @@ class DownloadTreeWidget(TreeWidget):
         self._checked_set: set[str] = set()
         self._unscanned_dirs: set[str] = set()
         self._updating = False
-        self._check_sync_cb: Callable[[set[str]], None] | None = None
         self._batch_expanding = False
         self.setHeaderLabels(["名称", "类型", "大小"])
         self.setColumnWidth(0, 300)
@@ -35,10 +34,6 @@ class DownloadTreeWidget(TreeWidget):
         self.itemExpanded.connect(self._on_item_expanded)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
-
-    def set_check_sync_callback(self, cb: Callable[[set[str]], None] | None) -> None:
-        """注册勾选状态实时同步回调（cb 接收 checked_ids 集合）"""
-        self._check_sync_cb = cb
 
     @staticmethod
     def _sort_key(item: DownloadItem) -> tuple:
@@ -257,8 +252,8 @@ class DownloadTreeWidget(TreeWidget):
                 tw.setCheckState(0, self._compute_check_state(iid))
         finally:
             self._updating = False
-        if notify and self._check_sync_cb:
-            self._check_sync_cb(set(self._checked_set))
+        if notify:
+            self.checked_ids_changed.emit(set(self._checked_set))
 
     def select_all(self):
         """全选：所有文件加入真值源，刷新已实现节点"""
@@ -290,8 +285,7 @@ class DownloadTreeWidget(TreeWidget):
                 p = p.parent()
         finally:
             self._updating = False
-        if self._check_sync_cb:
-            self._check_sync_cb(set(self._checked_set))
+        self.checked_ids_changed.emit(set(self._checked_set))
 
     def _cascade_check_realized(self, tw, checked):
         """递归设置已实现子节点勾选状态"""

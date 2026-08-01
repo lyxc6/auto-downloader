@@ -49,6 +49,8 @@ class ScanController(QObject):
 
         # 文件大小预取
         self._prefetch = SizePrefetcher(self.cache_manager, self.log_message.emit)
+        self._prefetch.progress.connect(self.size_prefetch_progress.emit)
+        self._prefetch.completed.connect(self.size_prefetch_completed.emit)
 
     @property
     def is_scanning(self) -> bool:
@@ -305,16 +307,26 @@ class ScanController(QObject):
             max_workers: 并行线程数
             dir_path: 指定目录路径（空=预取全部，非空=只预取该目录下的文件）
         """
-        self._prefetch.start(
-            max_workers=max_workers,
-            dir_path=dir_path,
-            on_progress=lambda item_id, size: self.size_prefetch_progress.emit(item_id, size),
-            on_completed=self.size_prefetch_completed.emit,
-        )
+        self._prefetch.start(max_workers=max_workers, dir_path=dir_path)
 
     def cancel_size_prefetch(self):
         """取消文件大小预取"""
         self._prefetch.cancel()
+
+    def load_cache_into_ui(self, url: str) -> bool:
+        """启动时从缓存恢复目录树到 UI（无缓存则跳过）
+
+        Args:
+            url: 上次扫描的 URL
+
+        Returns:
+            True 表示成功加载缓存
+        """
+        if not url or not self.cache_manager.has_data_for(url):
+            return False
+        logger.info("启动时自动加载缓存: %s", url)
+        self.cache_load_completed.emit(self.cache_manager.get_tree_data_snapshot(), self.cache_manager.checked_items)
+        return True
 
     def start_scan_with_cache(self, url: str, scan_mode: str = "dfs", parallel: bool = False):
         """智能扫描：自动处理缓存逻辑
@@ -323,9 +335,7 @@ class ScanController(QObject):
         - 有缓存但扫描未完成 → 断点续扫
         - 无缓存 → 新扫描
         """
-        self._scan_interrupted.clear()
-
-        # 相同URL且有缓存数据
+        self._scan_interrupted.clear()  # 相同URL且有缓存数据
         if self.cache_manager.has_data_for(url):
             logger.info("使用缓存数据恢复目录树: %s", url)
 

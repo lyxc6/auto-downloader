@@ -5,16 +5,22 @@ import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from PySide6.QtCore import QObject, Signal
+
 from ..models import CacheManager, DownloadItem
 from ..services.http_client import HttpClient
 
 logger = logging.getLogger(__name__)
 
 
-class SizePrefetcher:
+class SizePrefetcher(QObject):
     """扫描完成后，并行发送 HEAD 请求预取文件大小"""
 
-    def __init__(self, cache_manager: CacheManager, log: Callable[[str, str], None]):
+    progress = Signal(str, int)  # item_id, size（每完成一个文件）
+    completed = Signal()  # 全部完成
+
+    def __init__(self, cache_manager: CacheManager, log: Callable[[str, str], None], parent: QObject | None = None):
+        super().__init__(parent)
         self._cache = cache_manager
         self._log = log
         self._cancel_flag = threading.Event()
@@ -25,20 +31,12 @@ class SizePrefetcher:
         """是否正在预取"""
         return self._thread is not None and self._thread.is_alive()
 
-    def start(
-        self,
-        max_workers: int = 5,
-        dir_path: str = "",
-        on_progress: Callable[[str, int], None] | None = None,
-        on_completed: Callable[[], None] | None = None,
-    ) -> None:
+    def start(self, max_workers: int = 5, dir_path: str = "") -> None:
         """开始预取
 
         Args:
             max_workers: 并行线程数
             dir_path: 指定目录路径（空=预取全部，非空=只预取该目录下的文件）
-            on_progress: (item_id, size) 进度回调
-            on_completed: 全部完成回调
         """
         # 防重复：如果已有 prefetch 在运行，先取消它
         thread = self._thread
@@ -85,8 +83,7 @@ class SizePrefetcher:
                         completed += 1
                         if size is not None and size > 0:
                             self._cache.update_item_size(item_id, size)
-                            if on_progress:
-                                on_progress(item_id, size)
+                            self.progress.emit(item_id, size)
                         if completed % 20 == 0 or completed == total:
                             self._log(f"正在获取文件大小... ({completed}/{total})", "info")
             except Exception as e:
@@ -95,8 +92,7 @@ class SizePrefetcher:
             finally:
                 http_client.close()
                 self._cache.save()
-                if on_completed:
-                    on_completed()
+                self.completed.emit()
 
         self._thread = threading.Thread(target=_worker, daemon=True)
         self._thread.start()

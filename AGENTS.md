@@ -6,7 +6,8 @@ Python PySide6 desktop app for downloading files from a remote file server. Chin
 
 ## Key Files
 
-- `src/app.py` - Application bootstrap + signal wiring (scan/download callbacks)
+- `src/app.py` - Application bootstrap + composition root + shutdown management
+- `src/presenters/` - Flow presenters (scan_presenter, download_presenter, auto_save) - view state transitions, no direct UI in app.py
 - `src/update_flow.py` - Update check/download/restart flow
 - `src/models/` - Data models (download_item, config, cache_manager)
 - `src/views/` - UI views (main_window, download_panel, settings_panel, queue_panel)
@@ -105,7 +106,9 @@ from PySide6.QtWidgets import QPushButton, QLineEdit
 
 ## Architecture Notes
 
-- MVC architecture pattern
+- MVC + Presenter architecture pattern
+- app.py = composition root: assembles controllers/window/presenters, owns shutdown sequence
+- presenters = view state transitions (ScanPresenter/DownloadPresenter), auto-save policy in auto_save.py
 - GUI runs downloads in daemon threads with signal-slot communication
 - Supports theme switching (light/dark/auto) via `setTheme()`
 - Cache file location: same directory as exe (frozen) or script (dev)
