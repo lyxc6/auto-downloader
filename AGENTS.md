@@ -131,9 +131,10 @@ from PySide6.QtWidgets import QPushButton, QLineEdit
 
 ## Gotchas
 
-- `downloader.py` globals (`BASE_URL`, `DOWNLOAD_DIR`, etc.) are mutated by CLI args—avoid importing and relying on defaults
+- `src/update/checker.py` holds all Qt dependencies (QThread workers); keep pure logic in `services/update_logic.py` for testability
 - GUI preview requires Pillow; gracefully degrades if missing
 - Auto-save timer saves cache every 30s during active scan/download; stops when both are idle. Refresh keeps checked items and prunes entries no longer present on the server (incremental, preserves expand/scroll state).
 - Signal handler (SIGINT) registered for emergency cache save on Ctrl+C
 - PyInstaller build requires `collect_data_files('qfluentwidgets')` for FluentUI assets
 - `qfluentwidgets` lacks type stubs—pyright will report ~150 `reportUnknownMemberType` errors; this is expected and harmless
+- Per-thread `requests.Session` isolation required (SizePrefetcher uses `threading.local` clients); do not share a Session across threads
