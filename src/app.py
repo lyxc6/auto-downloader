@@ -14,8 +14,9 @@ from . import __version__
 from .controllers import DownloadController, ScanController
 from .models import AppConfig, CacheManager
 from .presenters import AutoSavePolicy, DownloadPresenter, ScanPresenter
-from .services import UpdateChecker, cleanup_old_exe
-from .update_flow import UpdateFlow
+from .services import cleanup_old_exe
+from .update import UpdateChecker
+from .update.flow import UpdateFlow
 from .utils.logger import setup_logging
 from .views import MainWindow
 
@@ -93,7 +94,7 @@ class Application:
         # 设置面板信号
         self.window.settingsPanel.theme_changed.connect(self.window.apply_theme)
         self.window.settingsPanel.config_changed.connect(self._on_config_changed)
-        self.window.settingsPanel.check_update_requested.connect(self._update_flow.on_check_update_requested)
+        self.window.settingsPanel.check_update_requested.connect(self._update_flow.check_update)
         self.window.closing.connect(self._on_app_closing)
 
         # 更新检查器信号 → 更新流程
@@ -186,4 +187,4 @@ class Application:
 
     def _auto_check_update(self):
         """启动时自动检查更新"""
-        self._update_flow.auto_check(self.config.update_channel, __version__, self.config.last_update_check_time)
+        self._update_flow.check_update(self.config.update_channel, __version__, self.config.last_update_check_time)

@@ -6,12 +6,17 @@ from PySide6.QtCore import QObject, QUrl
 from PySide6.QtGui import QDesktopServices
 from qfluentwidgets import InfoBar, InfoBarPosition, MessageDialog
 
-from .models import AppConfig
-from .services import UpdateChecker
-from .services.update_checker import GITHUB_RELEASES_URL
-from .views.settings_panel import SettingsPanel
+from ..models import AppConfig
+from ..services.update_logic import GITHUB_RELEASES_URL
+from ..views.settings_panel import SettingsPanel
+from .checker import UpdateChecker
 
 logger = logging.getLogger(__name__)
+
+INFO_DURATION = 3000  # 常规通知时长（毫秒）
+SUCCESS_DURATION = 2000  # 成功通知时长（毫秒）
+ERROR_DURATION = 5000  # 错误通知时长（毫秒）
+NOTES_PREVIEW_LEN = 200  # 更新说明预览长度
 
 
 class UpdateFlow(QObject):
@@ -41,12 +46,8 @@ class UpdateFlow(QObject):
         self._checker.download_finished.connect(self._on_download_finished)
         self._checker.download_error.connect(self._on_download_error)
 
-    def on_check_update_requested(self, channel: str, version: str, last_check_time: str):
-        """手动检查更新请求"""
-        self._checker.check_update(channel, version, last_check_time)
-
-    def auto_check(self, channel: str, version: str, last_check_time: str):
-        """启动时自动检查更新"""
+    def check_update(self, channel: str, version: str, last_check_time: str):
+        """发起更新检查（手动/自动共用）"""
         self._checker.check_update(channel, version, last_check_time)
 
     def _on_check_finished(self, result: dict):
@@ -59,7 +60,7 @@ class UpdateFlow(QObject):
                 content=result["error"],
                 parent=self._window,
                 position=InfoBarPosition.TOP,
-                duration=3000,
+                duration=INFO_DURATION,
             )
             return
 
@@ -81,7 +82,7 @@ class UpdateFlow(QObject):
                     content=f"发现新版本 v{version}，正在下载...",
                     parent=self._window,
                     position=InfoBarPosition.TOP,
-                    duration=3000,
+                    duration=INFO_DURATION,
                 )
                 self._pending_update_url = url
                 self._pending_update_notes = notes
@@ -95,17 +96,16 @@ class UpdateFlow(QObject):
                 content="已是最新版本",
                 parent=self._window,
                 position=InfoBarPosition.TOP,
-                duration=2000,
+                duration=SUCCESS_DURATION,
             )
 
     def _show_manual_update_dialog(self, url: str, version: str, notes: str):
         """显示手动下载对话框"""
         notes = notes or ""
-        dialog = MessageDialog(
-            "发现新版本",
-            f"发现新版本 v{version}\n\n{notes[:200]}{'...' if len(notes) > 200 else ''}",
-            self._window,
-        )
+        preview = notes[:NOTES_PREVIEW_LEN]
+        if len(notes) > NOTES_PREVIEW_LEN:
+            preview += "..."
+        dialog = MessageDialog("发现新版本", f"发现新版本 v{version}\n\n{preview}", self._window)
         dialog.yesButton.setText("前往下载")
         dialog.cancelButton.setText("取消")
 
@@ -124,7 +124,7 @@ class UpdateFlow(QObject):
             content="新版本已下载完成，正在重启...",
             parent=self._window,
             position=InfoBarPosition.TOP,
-            duration=2000,
+            duration=SUCCESS_DURATION,
         )
 
     def _on_download_error(self, error_msg: str):
@@ -138,7 +138,7 @@ class UpdateFlow(QObject):
             content=f"自动下载失败: {error_msg}，请手动下载",
             parent=self._window,
             position=InfoBarPosition.TOP,
-            duration=5000,
+            duration=ERROR_DURATION,
         )
 
     def _on_check_error(self, error_msg: str):
@@ -149,5 +149,5 @@ class UpdateFlow(QObject):
             content=f"检查失败: {error_msg}",
             parent=self._window,
             position=InfoBarPosition.TOP,
-            duration=3000,
+            duration=INFO_DURATION,
         )

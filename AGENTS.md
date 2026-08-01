@@ -8,11 +8,11 @@ Python PySide6 desktop app for downloading files from a remote file server. Chin
 
 - `src/app.py` - Application bootstrap + composition root + shutdown management
 - `src/presenters/` - Flow presenters (scan_presenter, download_presenter, auto_save) - view state transitions, no direct UI in app.py
-- `src/update_flow.py` - Update check/download/restart flow
+- `src/update/` - Update check/download/restart flow (Qt workers in checker.py, orchestration in flow.py)
 - `src/models/` - Data models (download_item, config, cache_manager)
 - `src/views/` - UI views (main_window, download_panel, settings_panel, queue_panel)
 - `src/controllers/` - Controllers (scan_controller, download_controller, scan_runner, size_prefetcher)
-- `src/services/` - Business logic (scanner, downloader, http_client, html_parser)
+- `src/services/` - Pure-Python business logic (scanner, downloader, http_client, html_parser, update_logic)
 - `main.py` - Main startup script
 - `自动下载器.spec` - PyInstaller build spec
 - `requirements.txt` - Runtime dependencies

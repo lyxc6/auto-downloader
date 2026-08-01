@@ -1,66 +1,28 @@
-"""更新检查服务"""
+"""更新检查/下载（Qt worker + 编排；纯逻辑见 services.update_logic）"""
 
 import logging
-import os
 import subprocess
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
-from pathlib import Path
 
 import requests
-from packaging.version import Version
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
+from ..services.update_logic import (
+    GITHUB_API_URL,
+    GITHUB_RELEASES_URL,
+    OLD_EXE_NAME,
+    TEMP_EXE_NAME,
+    compare_versions,
+    extract_download_url,
+    get_exe_dir,
+    get_exe_path,
+    is_newer_test_release,
+    parse_version,
+)
+
 logger = logging.getLogger(__name__)
-
-GITHUB_API_URL = "https://api.github.com/repos/lyxc6/auto-downloader/releases"
-GITHUB_RELEASES_URL = "https://github.com/lyxc6/auto-downloader/releases"
-ASSET_FILENAME = "自动下载器.exe"
-TEMP_EXE_NAME = "update_temp.exe"
-OLD_EXE_NAME = "自动下载器_old.exe"
-
-
-def _get_exe_dir() -> Path:
-    """获取可执行文件所在目录"""
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).resolve().parent.parent.parent
-
-
-def _get_exe_path() -> Path:
-    """获取可执行文件路径"""
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable)
-    return Path(__file__).resolve().parent.parent.parent / "main.py"
-
-
-def cleanup_old_exe():
-    """清理上次更新残留的旧版本文件"""
-    exe_dir = _get_exe_dir()
-    old_path = exe_dir / OLD_EXE_NAME
-    if old_path.exists():
-        try:
-            old_path.unlink()
-            logger.info("已清理旧版本文件: %s", old_path)
-        except OSError as e:
-            logger.warning("清理旧版本文件失败: %s", e)
-
-    temp_path = exe_dir / TEMP_EXE_NAME
-    if temp_path.exists():
-        try:
-            temp_path.unlink()
-            logger.info("已清理残留临时文件: %s", temp_path)
-        except OSError as e:
-            logger.warning("清理临时文件失败: %s", e)
-
-
-def _extract_download_url(release: dict) -> str:
-    """从 release 的 assets 中提取下载 URL"""
-    assets = release.get("assets", [])
-    for asset in assets:
-        if asset.get("name") == ASSET_FILENAME:
-            return asset.get("browser_download_url", "")
-    return ""
 
 
 class UpdateCheckWorker(QThread):
@@ -97,6 +59,21 @@ class UpdateCheckWorker(QThread):
             logger.error("检查更新时发生错误: %s", e)
             self.error.emit(f"检查失败: {e}")
 
+    def _emit_result(self, release: dict, has_update: bool) -> None:
+        """发射统一的检查结果"""
+        tag = release.get("tag_name") or ""
+        self.finished.emit(
+            {
+                "has_update": has_update,
+                "version": tag.lstrip("v") if tag else "",
+                "tag": tag,
+                "url": release.get("html_url") or GITHUB_RELEASES_URL,
+                "download_url": extract_download_url(release),
+                "notes": release.get("body") or "",
+                "published_at": release.get("published_at") or "",
+            }
+        )
+
     def _check_stable(self, releases: list):
         """检查稳定版更新"""
         stable_releases = [r for r in releases if not r.get("prerelease", False) and not r.get("draft", False)]
@@ -106,30 +83,15 @@ class UpdateCheckWorker(QThread):
             return
 
         latest = stable_releases[0]
-        remote_tag = latest.get("tag_name") or ""
-        remote_version = remote_tag.lstrip("v")
+        remote_version = (latest.get("tag_name") or "").lstrip("v")
 
-        try:
-            local_ver = Version(self.current_version)
-            remote_ver = Version(remote_version)
-        except Exception as e:
-            logger.error("版本解析失败: %s", e)
+        if parse_version(remote_version) is None:
+            logger.error("版本解析失败: %s", remote_version)
             self.finished.emit({"has_update": False, "error": "版本号格式错误"})
             return
 
-        has_update = remote_ver > local_ver
-
-        self.finished.emit(
-            {
-                "has_update": has_update,
-                "version": remote_version,
-                "tag": remote_tag,
-                "url": latest.get("html_url") or GITHUB_RELEASES_URL,
-                "download_url": _extract_download_url(latest),
-                "notes": latest.get("body") or "",
-                "published_at": latest.get("published_at") or "",
-            }
-        )
+        has_update = compare_versions(self.current_version, remote_version)
+        self._emit_result(latest, has_update)
 
     def _check_test(self, releases: list):
         """检查测试版更新"""
@@ -141,29 +103,8 @@ class UpdateCheckWorker(QThread):
 
         latest = test_releases[0]
         published_at = latest.get("published_at") or ""
-
-        has_update = False
-        if self.last_check_time:
-            try:
-                remote_time = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
-                last_check = datetime.fromisoformat(self.last_check_time.replace("Z", "+00:00"))
-                has_update = remote_time > last_check
-            except (ValueError, TypeError):
-                has_update = True
-        else:
-            has_update = True
-
-        self.finished.emit(
-            {
-                "has_update": has_update,
-                "version": latest.get("tag_name") or "",
-                "tag": latest.get("tag_name") or "",
-                "url": latest.get("html_url") or GITHUB_RELEASES_URL,
-                "download_url": _extract_download_url(latest),
-                "notes": latest.get("body") or "",
-                "published_at": published_at,
-            }
-        )
+        has_update = is_newer_test_release(published_at, self.last_check_time)
+        self._emit_result(latest, has_update)
 
 
 class UpdateDownloadWorker(QThread):
@@ -179,7 +120,7 @@ class UpdateDownloadWorker(QThread):
 
     def run(self):
         try:
-            exe_dir = _get_exe_dir()
+            exe_dir = get_exe_dir()
             temp_path = exe_dir / TEMP_EXE_NAME
 
             logger.info("开始下载更新: %s", self.download_url)
@@ -215,7 +156,7 @@ class UpdateDownloadWorker(QThread):
 
     def _cleanup_temp(self):
         """清理临时文件"""
-        temp_path = _get_exe_dir() / TEMP_EXE_NAME
+        temp_path = get_exe_dir() / TEMP_EXE_NAME
         if temp_path.exists():
             try:
                 temp_path.unlink()
@@ -223,15 +164,20 @@ class UpdateDownloadWorker(QThread):
                 pass
 
 
-def perform_update() -> None:
+def perform_update(launcher: Callable[[list[str]], object] | None = None) -> None:
     """执行更新替换并重启应用
 
     调用顺序：rename 当前 exe → rename 新 exe → 启动新进程 → 退出当前进程
+
+    Args:
+        launcher: 进程启动器（可注入以便测试），默认 subprocess.Popen
     """
-    exe_dir = _get_exe_dir()
-    exe_path = _get_exe_path()
+    exe_dir = get_exe_dir()
+    exe_path = get_exe_path()
     temp_path = exe_dir / TEMP_EXE_NAME
     old_path = exe_dir / OLD_EXE_NAME
+    if launcher is None:
+        launcher = subprocess.Popen
 
     if not temp_path.exists():
         logger.error("更新文件不存在: %s", temp_path)
@@ -257,12 +203,14 @@ def perform_update() -> None:
 
         # 4. 启动新进程
         if getattr(sys, "frozen", False):
-            subprocess.Popen([str(exe_path)])
+            launcher([str(exe_path)])
         else:
-            subprocess.Popen([sys.executable, str(exe_path)])
+            launcher([sys.executable, str(exe_path)])
         logger.info("已启动新版本进程")
 
         # 5. 退出当前进程
+        import os
+
         os._exit(0)
 
     except Exception as e:

@@ -192,8 +192,11 @@ class ScanService:
         return self._parser.parse_items(html)
 
     def get_total_pages(self, html: str, dir_path: str = "") -> int:
-        """获取总页数（带缓存）"""
-        return self._page_cache.get_page_count(dir_path, html)
+        """获取总页数（带内容哈希缓存）"""
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(html, "html.parser")
+        return self._page_cache.get_page_count("", dir_path, soup)
 
     # ==================== 分页获取方法 ====================
 
@@ -265,7 +268,8 @@ class ScanService:
 
         self._merge_items(items1, dir_path, base_url, all_dirs, all_files)
 
-        total_pages = self.get_total_pages(html1, dir_path)
+        # 复用已解析的 soup1 计算总页数（避免重复 BeautifulSoup 解析）
+        total_pages = self._page_cache.get_page_count(base_url, dir_path, soup1)
         if self.on_log and not self.parallel_mode:
             self.on_log(f"  获取页面 1/{total_pages}", "dim")
 

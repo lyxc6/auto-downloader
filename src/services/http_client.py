@@ -20,6 +20,7 @@ class HttpClient:
         scan_delay: float = 0.02,
         scan_timeout: float = 300.0,
         dir_scan_timeout: float = 30.0,
+        request_timeout: float = 60.0,
     ):
         self._session: requests.Session | None = None
         self._lock = threading.Lock()
@@ -28,6 +29,7 @@ class HttpClient:
         self._scan_delay = scan_delay
         self._scan_timeout = scan_timeout
         self._dir_scan_timeout = dir_scan_timeout
+        self._request_timeout = request_timeout
         self._last_progress_time: float = time.monotonic()
         self._dir_start_time: float = 0.0
         self._progress_lock = threading.Lock()
@@ -114,7 +116,42 @@ class HttpClient:
 
     def reset_progress(self):
         """重置进度计时器"""
-        self._last_progress_time = time.monotonic()
+        with self._progress_lock:
+            self._last_progress_time = time.monotonic()
+            self._dir_start_time = 0.0
+
+    def _register_failure(self, url: str, reason: str) -> None:
+        """记录一次失败（错误回调 + 失败目录计数）"""
+        if self.on_error:
+            self.on_error(f"获取页面失败: {reason}")
+        with self._failed_dirs_lock:
+            self._failed_dirs += 1
+        logger.error("获取页面失败: %s -> %s", url, reason)
+
+    def _handle_request_exception(self, url: str, retries: int, attempt: int, exc: requests.RequestException) -> bool:
+        """处理请求异常，返回 True 表示已重试（继续循环），False 表示重试耗尽
+
+        Args:
+            attempt: 当前已尝试次数（0 起）
+        """
+        status_code: int | None = None
+        if isinstance(exc, requests.HTTPError) and exc.response is not None:
+            status_code = exc.response.status_code
+
+        retry_config = RetryPolicy.get_retry_config(status_code)
+        max_retries = min(retries, retry_config.max_retries)
+
+        # 检查是否应该重试
+        if attempt >= max_retries:
+            reason = f"HTTP {status_code}" if status_code is not None else f"{exc.__class__.__name__}: {exc}"
+            self._register_failure(url, reason)
+            return False
+
+        # 计算延迟并重试
+        delay = RetryPolicy.calculate_delay(attempt, retry_config)
+        logger.warning("获取页面重试 %d/%d: %s -> %s (等待 %.1f秒)", attempt + 1, max_retries, url, exc, delay)
+        time.sleep(delay)
+        return True
 
     def get_page(
         self,
@@ -145,87 +182,15 @@ class HttpClient:
                 return None
 
             try:
-                resp = session.get(url, timeout=60)
+                resp = session.get(url, timeout=self._request_timeout)
                 resp.raise_for_status()
                 resp.encoding = "utf-8"
                 return resp.text
-            except requests.HTTPError as e:
-                status_code = e.response.status_code if e.response is not None else None
-
-                # 获取重试配置
-                retry_config = RetryPolicy.get_retry_config(status_code)
-                max_retries = min(retries, retry_config["max_retries"])
-
-                # 检查是否应该重试
-                if attempt >= max_retries:
-                    logger.error("获取页面失败(不再重试): %s -> %s", url, status_code)
-                    if self.on_error:
-                        self.on_error(f"获取页面失败: HTTP {status_code}")
-                    with self._failed_dirs_lock:
-                        self._failed_dirs += 1
+            except requests.RequestException as e:
+                if self._handle_request_exception(url, retries, attempt, e):
+                    attempt += 1
+                else:
                     return None
-
-                # 计算延迟
-                delay = RetryPolicy.calculate_delay(attempt, retry_config)
-                logger.warning(
-                    "获取页面重试 %d/%d: %s -> %s (等待 %.1f秒)", attempt + 1, max_retries, url, status_code, delay
-                )
-                time.sleep(delay)
-                attempt += 1
-
-            except requests.ConnectionError as e:
-                # 连接错误，可重试
-                retry_config = RetryPolicy.get_retry_config(None)
-                max_retries = min(retries, retry_config["max_retries"])
-
-                if attempt >= max_retries:
-                    logger.error("获取页面失败(连接错误): %s -> %s", url, e)
-                    if self.on_error:
-                        self.on_error(f"连接失败: {e}")
-                    with self._failed_dirs_lock:
-                        self._failed_dirs += 1
-                    return None
-
-                delay = RetryPolicy.calculate_delay(attempt, retry_config)
-                logger.warning("获取页面重试 %d/%d: %s -> %s (等待 %.1f秒)", attempt + 1, max_retries, url, e, delay)
-                time.sleep(delay)
-                attempt += 1
-
-            except requests.Timeout as e:
-                # 超时错误，可重试
-                retry_config = RetryPolicy.get_retry_config(None)
-                max_retries = min(retries, retry_config["max_retries"])
-
-                if attempt >= max_retries:
-                    logger.error("获取页面失败(超时): %s -> %s", url, e)
-                    if self.on_error:
-                        self.on_error(f"请求超时: {e}")
-                    with self._failed_dirs_lock:
-                        self._failed_dirs += 1
-                    return None
-
-                delay = RetryPolicy.calculate_delay(attempt, retry_config)
-                logger.warning("获取页面重试 %d/%d: %s -> %s (等待 %.1f秒)", attempt + 1, max_retries, url, e, delay)
-                time.sleep(delay)
-                attempt += 1
-
-            except Exception as e:
-                # 其他错误，保守重试
-                retry_config = RetryPolicy.get_retry_config(None)
-                max_retries = min(retries, retry_config["max_retries"])
-
-                if attempt >= max_retries:
-                    logger.error("获取页面失败: %s -> %s", url, e)
-                    if self.on_error:
-                        self.on_error(f"获取页面失败: {e}")
-                    with self._failed_dirs_lock:
-                        self._failed_dirs += 1
-                    return None
-
-                delay = RetryPolicy.calculate_delay(attempt, retry_config)
-                logger.warning("获取页面重试 %d/%d: %s -> %s (等待 %.1f秒)", attempt + 1, max_retries, url, e, delay)
-                time.sleep(delay)
-                attempt += 1
 
         return None
 
@@ -241,7 +206,7 @@ class HttpClient:
         """
         session = self.session
         for attempt in range(retries):
-            cl, _ = fetch_file_info(session, url, 30)
+            cl, _ = fetch_file_info(session, url, self._request_timeout)
             if cl is not None:
                 return cl
             if attempt < retries - 1:
@@ -287,18 +252,12 @@ def fetch_file_info(session: requests.Session, url: str, timeout: float) -> tupl
         ar = resp.headers.get("accept-ranges")
         resp.close()
         return (int(cl) if cl else None, ar)
-    except requests.ConnectionError as e:
-        logger.warning("连接失败: %s -> %s", url, e)
-        return (None, None)
-    except requests.Timeout as e:
-        logger.warning("请求超时: %s -> %s", url, e)
-        return (None, None)
     except requests.RequestException as e:
         logger.warning("请求失败: %s -> %s", url, e)
         return (None, None)
     except (ValueError, TypeError) as e:
         logger.error("解析远端文件信息失败: %s -> %s", url, e)
         return (None, None)
-    except Exception as e:
-        logger.error("获取远端文件信息失败: %s -> %s", url, e)
+    except OSError as e:
+        logger.warning("文件信息请求IO错误: %s -> %s", url, e)
         return (None, None)

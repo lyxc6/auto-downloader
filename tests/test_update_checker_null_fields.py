@@ -6,8 +6,8 @@
 - _show_manual_update_dialog 对 None notes 不崩溃(防御性兜底)
 """
 
-from src.services.update_checker import UpdateCheckWorker
-from src.update_flow import UpdateFlow
+from src.update.checker import UpdateCheckWorker
+from src.update.flow import UpdateFlow
 
 
 def _release(body=None, tag=None, html_url=None, prerelease=False, assets=None):
@@ -68,7 +68,7 @@ def test_show_manual_update_dialog_notes_none_safe(monkeypatch):
     FakeDialog.yesButton = type("B", (), {"setText": lambda self, t: None})()
     FakeDialog.cancelButton = FakeDialog.yesButton
 
-    monkeypatch.setattr("src.update_flow.MessageDialog", FakeDialog)
+    monkeypatch.setattr("src.update.flow.MessageDialog", FakeDialog)
     flow = UpdateFlow.__new__(UpdateFlow)
     flow._window = object()
     flow._show_manual_update_dialog("http://x", "1.1.0", None)

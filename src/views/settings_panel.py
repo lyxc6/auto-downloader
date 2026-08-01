@@ -24,7 +24,7 @@ from qfluentwidgets.common.config import OptionsConfigItem, OptionsValidator
 
 from .. import __version__
 from ..models import AppConfig
-from ..services.update_checker import GITHUB_RELEASES_URL
+from ..services.update_logic import GITHUB_RELEASES_URL
 
 
 class SpinBoxSettingCard(SettingCard):
