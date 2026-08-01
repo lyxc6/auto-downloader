@@ -22,6 +22,8 @@ class TreeIndex:
         self._children_index: dict[str, list[str]] = {}
         self._loaded: set[str] = set()
         self._unscanned_dirs: set[str] = set()
+        # 目录 id -> 文件后代总数（勾选三态 O(1) 判定用）
+        self._dir_file_count: dict[str, int] = {}
 
     # ==================== 只读访问（供 Qt 层查询） ====================
 
@@ -47,6 +49,23 @@ class TreeIndex:
     def get(self, item_id: str) -> DownloadItem | None:
         return self._all_items.get(item_id)
 
+    def dir_file_count(self, item_id: str) -> int:
+        """目录的文件后代总数（O(1)）"""
+        return self._dir_file_count.get(item_id, 0)
+
+    def ancestors(self, item_id: str) -> list[str]:
+        """返回 item 的所有祖先目录 id（自底向上，不含自身）"""
+        result: list[str] = []
+        seen: set[str] = set()
+        item = self._all_items.get(item_id)
+        parent_id = item.parent_id if item else ""
+        while parent_id and parent_id not in seen:
+            result.append(parent_id)
+            seen.add(parent_id)
+            parent_item = self._all_items.get(parent_id)
+            parent_id = parent_item.parent_id if parent_item else ""
+        return result
+
     @staticmethod
     def sort_key(item: DownloadItem) -> tuple:
         """排序键：目录优先，按名称字母顺序"""
@@ -64,6 +83,23 @@ class TreeIndex:
             child_ids.sort(key=lambda cid: self.sort_key(self._all_items[cid]))
         self._loaded = set()
         self._unscanned_dirs = set()
+        self._rebuild_dir_file_count()
+
+    def _rebuild_dir_file_count(self):
+        """重建目录文件计数（每个文件沿祖先链 +1，一次 O(N×深度)）"""
+        counts: dict[str, int] = {}
+        for item in self._all_items.values():
+            if item.is_file:
+                for pid in self.ancestors(item.item_id):
+                    counts[pid] = counts.get(pid, 0) + 1
+        self._dir_file_count = counts
+
+    def _bump_dir_file_count(self, item: DownloadItem, delta: int) -> None:
+        """沿祖先链增减文件计数（add/remove 时维护）"""
+        if not item.is_file:
+            return
+        for pid in self.ancestors(item.item_id):
+            self._dir_file_count[pid] = self._dir_file_count.get(pid, 0) + delta
 
     def add_item(self, item: DownloadItem) -> bool:
         """增量添加（实时扫描 / 节流批量路径共用）
@@ -78,6 +114,9 @@ class TreeIndex:
         self._children_index.setdefault(item.parent_id, []).append(item.item_id)
         if item.is_dir:
             self._unscanned_dirs.add(item.item_id)
+            self._dir_file_count.setdefault(item.item_id, 0)
+        else:
+            self._bump_dir_file_count(item, 1)
         return True
 
     def set_unscanned_dirs(self, dirs: set[str]) -> None:
@@ -114,11 +153,18 @@ class TreeIndex:
             descendant_ids.add(cid)
             queue.extend(self._children_index.get(cid, []))
 
+        # 统计被移除的文件数，沿祖先链递减计数（被移除目录自身的计数已随移除消失）
+        removed_files = sum(1 for did in descendant_ids if self._all_items[did].is_file)
+        for pid in [dir_item_id, *self.ancestors(dir_item_id)]:
+            if pid in self._dir_file_count:
+                self._dir_file_count[pid] -= removed_files
+
         for did in descendant_ids:
             self._all_items.pop(did, None)
             self._children_index.pop(did, None)
             self._loaded.discard(did)
             self._unscanned_dirs.discard(did)
+            self._dir_file_count.pop(did, None)
 
         # 目录自身的孩子列表已清空
         self._children_index.pop(dir_item_id, None)
@@ -133,6 +179,7 @@ class TreeIndex:
         self._children_index.clear()
         self._loaded.clear()
         self._unscanned_dirs.clear()
+        self._dir_file_count.clear()
 
 
 class DownloadTreeWidget(TreeWidget):
@@ -146,6 +193,8 @@ class DownloadTreeWidget(TreeWidget):
         self._index = TreeIndex()
         self._items: dict[str, QTreeWidgetItem] = {}  # realized 节点（item_id -> QTreeWidgetItem）
         self._checked_set: set[str] = set()  # 勾选真值源（与 realize 状态无关）
+        # 目录 id -> 已勾选文件后代数（勾选三态 O(1) 判定用，勾选变化时增量维护）
+        self._checked_dir_count: dict[str, int] = {}
         self._updating = False
         self._batch_expanding = False
         self.setHeaderLabels(["名称", "类型", "大小"])
@@ -285,19 +334,25 @@ class DownloadTreeWidget(TreeWidget):
             self._updating = False
 
     def _compute_check_state(self, item_id):
-        """从 _checked_set + 索引计算三态（不依赖 realized 子节点）"""
+        """从勾选计数缓存计算三态（O(1)，不依赖 realized 子节点）"""
         item = self._all_items[item_id]
         if item.is_file:
             return Qt.CheckState.Checked if item_id in self._checked_set else Qt.CheckState.Unchecked
-        files = self._index.file_descendants(item_id)
-        if not files:
+        total = self._index.dir_file_count(item_id)
+        if total <= 0:
             return Qt.CheckState.Unchecked
-        checked_count = sum(1 for f in files if f in self._checked_set)
-        if checked_count == len(files):
+        checked = self._checked_dir_count.get(item_id, 0)
+        if checked >= total:
             return Qt.CheckState.Checked
-        if checked_count == 0:
+        if checked <= 0:
             return Qt.CheckState.Unchecked
         return Qt.CheckState.PartiallyChecked
+
+    def _update_checked_counts(self, file_ids: list[str], delta: int) -> None:
+        """批量更新勾选计数：file_ids 中每个文件沿祖先链 ±1"""
+        for fid in file_ids:
+            for pid in self._index.ancestors(fid):
+                self._checked_dir_count[pid] = self._checked_dir_count.get(pid, 0) + delta
 
     def add_item(self, item: DownloadItem):
         """增量添加（实时扫描路径）：更新索引，按需 realize"""
@@ -355,7 +410,15 @@ class DownloadTreeWidget(TreeWidget):
 
     def _set_checked_set(self, checked_ids: set[str], notify: bool = False) -> None:
         """设置真值源并刷新已实现节点三态（select_all/deselect_all/apply_checked_items 共用）"""
-        self._checked_set = set(checked_ids)
+        new_set = set(checked_ids)
+        # 增量维护勾选计数：只处理新旧集合的差异，避免全量重算
+        removed = self._checked_set - new_set
+        added = new_set - self._checked_set
+        if removed:
+            self._update_checked_counts(list(removed), -1)
+        if added:
+            self._update_checked_counts(list(added), 1)
+        self._checked_set = new_set
         self._updating = True
         try:
             for iid, tw in self._items.items():
@@ -387,6 +450,7 @@ class DownloadTreeWidget(TreeWidget):
                 self._checked_set.update(files)
             else:
                 self._checked_set.difference_update(files)
+            self._update_checked_counts(files, 1 if checked else -1)
             self._cascade_check_realized(tw, checked)
             p = tw.parent()
             while p is not None:
@@ -457,6 +521,7 @@ class DownloadTreeWidget(TreeWidget):
         self._items.clear()
         self._index.clear()
         self._checked_set.clear()
+        self._checked_dir_count.clear()
 
     def _show_context_menu(self, pos):
         """显示右键菜单"""
@@ -511,6 +576,14 @@ class DownloadTreeWidget(TreeWidget):
         """移除指定目录的所有子节点（含后代），保留目录自身。返回被移除的 item_id 集合"""
         descendant_ids = self._index.remove_descendants(dir_item_id)
         self._remove_realized_children(dir_item_id)
+        # 同步清理勾选真值源中的失效 id，并递减相关目录勾选计数
+        removed_checked = {fid for fid in descendant_ids if fid in self._checked_set}
+        if removed_checked:
+            self._update_checked_counts(list(removed_checked), -1)
+        self._checked_set.difference_update(descendant_ids)
+        # 被移除目录自身的勾选计数一并清除（含未勾选但残留的目录键）
+        for did in descendant_ids:
+            self._checked_dir_count.pop(did, None)
 
         tree_item = self._items.get(dir_item_id)
         if tree_item is not None and dir_item_id in self._all_items:

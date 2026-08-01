@@ -32,13 +32,20 @@ class LogWidget(PlainTextEdit):
         self.setReadOnly(True)
         self.setFont(QFont("Consolas", 9))
         self._messages: list[tuple[str, str]] = []
+        # 配色字典缓存（主题切换时重建，避免每次渲染重新构造）
+        self._colors: dict = {}
+        self._rebuild_colors()
         qconfig.themeChanged.connect(self._on_theme_changed)
 
+    def _rebuild_colors(self):
+        """按当前主题重建配色缓存"""
+        self._colors = dict(_DARK if isDarkTheme() else _LIGHT)
+
     def _get_colors(self) -> dict:
-        return dict(_DARK if isDarkTheme() else _LIGHT)
+        return self._colors
 
     def _render_message(self, message: str, level: str):
-        colors = self._get_colors()
+        colors = self._colors
         fmt = QTextCharFormat()
         fmt.setForeground(QColor(colors.get(level, colors["info"])))
         if level == "header":
@@ -59,6 +66,7 @@ class LogWidget(PlainTextEdit):
             self._render_message(message, level)
 
     def _on_theme_changed(self, _theme: Theme):
+        self._rebuild_colors()
         self.clear()
         self._render_all()
 

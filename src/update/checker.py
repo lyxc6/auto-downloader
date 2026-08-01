@@ -130,6 +130,7 @@ class UpdateDownloadWorker(QThread):
 
                 total_size = int(response.headers.get("content-length", 0))
                 downloaded = 0
+                last_percent = -1
 
                 with open(temp_path, "wb") as f:
                     for chunk in response.iter_content(chunk_size=8192):
@@ -138,7 +139,10 @@ class UpdateDownloadWorker(QThread):
                             downloaded += len(chunk)
                             if total_size > 0:
                                 percent = int(downloaded * 100 / total_size)
-                                self.progress.emit(percent)
+                                # 节流：百分比变化时才发射信号，避免每 8KB 一次高频信号
+                                if percent != last_percent:
+                                    last_percent = percent
+                                    self.progress.emit(percent)
 
                 logger.info("下载完成: %s (%d bytes)", temp_path, downloaded)
                 self.finished.emit(str(temp_path))

@@ -35,8 +35,10 @@ class DownloadPresenter(QObject):
         self._queue_view = queue_view
         self._auto_save = auto_save
 
-        # 批次进度累计，用于底部总进度条
+        # 批次进度累计（增量维护，驱动底部总进度条）
         self._dl_progress: dict[str, tuple[int, int]] = {}
+        self._dl_sum_downloaded = 0
+        self._dl_sum_total = 0
 
         self._connect_signals()
 
@@ -74,6 +76,8 @@ class DownloadPresenter(QObject):
 
         # 重置批次进度累计，用于底部总进度条
         self._dl_progress = {}
+        self._dl_sum_downloaded = 0
+        self._dl_sum_total = 0
 
         # 设置下载状态
         self._view.set_downloading(True)
@@ -90,14 +94,15 @@ class DownloadPresenter(QObject):
     # ==================== 下载结果回调 ====================
 
     def _on_download_progress(self, item_id: str, downloaded: int, total_size: int):
-        """下载进度更新"""
+        """下载进度更新（增量累计总进度，避免每次全量求和）"""
         self._queue_view.update_progress(item_id, downloaded, total_size)
 
-        # 累计各文件进度，驱动底部总进度条
+        # 增量修正：同一 item 的 total 中途可能变化（续传场景），用差值更新累计
+        prev_downloaded, prev_total = self._dl_progress.get(item_id, (0, 0))
+        self._dl_sum_downloaded += downloaded - prev_downloaded
+        self._dl_sum_total += total_size - prev_total
         self._dl_progress[item_id] = (downloaded, total_size)
-        sum_downloaded = sum(d for d, _ in self._dl_progress.values())
-        sum_total = sum(t for _, t in self._dl_progress.values())
-        self._view.update_progress(sum_downloaded, sum_total)
+        self._view.update_progress(self._dl_sum_downloaded, self._dl_sum_total)
 
     def _on_download_status(self, item_id: str, status: str):
         """下载状态更新"""
@@ -109,6 +114,8 @@ class DownloadPresenter(QObject):
         # 批次结束将总进度条置满（随后 set_downloading(False) 会隐藏它）
         self._view.update_progress(1, 1)
         self._dl_progress = {}
+        self._dl_sum_downloaded = 0
+        self._dl_sum_total = 0
         self._cache_manager.save()
         logger.info("下载完成，缓存已保存")
         self._auto_save.stop_if_idle()
