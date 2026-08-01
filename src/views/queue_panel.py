@@ -7,7 +7,7 @@ from qfluentwidgets import (
     BodyLabel,
     CardWidget,
     FluentSystemColor,
-    MessageDialog,
+    MessageBox,
     ProgressBar,
     StrongBodyLabel,
     TableWidget,
@@ -184,7 +184,7 @@ class QueuePanel(QWidget):
 
     def confirm_clear(self):
         """弹确认框后清空列表（清空按钮入口）"""
-        dialog = MessageDialog(
+        dialog = MessageBox(
             "确认清空",
             "确定要清空下载队列吗？正在下载的任务将失去可见性。",
             self,

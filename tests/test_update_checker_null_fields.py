@@ -68,7 +68,7 @@ def test_show_manual_update_dialog_notes_none_safe(monkeypatch):
     FakeDialog.yesButton = type("B", (), {"setText": lambda self, t: None})()
     FakeDialog.cancelButton = FakeDialog.yesButton
 
-    monkeypatch.setattr("src.update.flow.MessageDialog", FakeDialog)
+    monkeypatch.setattr("src.update.flow.MessageBox", FakeDialog)
     flow = UpdateFlow.__new__(UpdateFlow)
     flow._window = object()
     flow._show_manual_update_dialog("http://x", "1.1.0", None)

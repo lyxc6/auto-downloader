@@ -4,7 +4,7 @@ import logging
 
 from PySide6.QtCore import QObject, QUrl
 from PySide6.QtGui import QDesktopServices
-from qfluentwidgets import InfoBar, InfoBarPosition, MessageDialog
+from qfluentwidgets import InfoBar, InfoBarPosition, MessageBox
 
 from ..models import AppConfig
 from ..services.update_logic import GITHUB_RELEASES_URL
@@ -105,7 +105,7 @@ class UpdateFlow(QObject):
         preview = notes[:NOTES_PREVIEW_LEN]
         if len(notes) > NOTES_PREVIEW_LEN:
             preview += "..."
-        dialog = MessageDialog("发现新版本", f"发现新版本 v{version}\n\n{preview}", self._window)
+        dialog = MessageBox("发现新版本", f"发现新版本 v{version}\n\n{preview}", self._window)
         dialog.yesButton.setText("前往下载")
         dialog.cancelButton.setText("取消")
 
