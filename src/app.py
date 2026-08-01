@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QApplication
 from qfluentwidgets import InfoBar, InfoBarPosition
 
-from . import __version__
+from . import WINDOW_TITLE, __version__
 from .controllers import DownloadController, ScanController
 from .models import AppConfig, CacheManager
 from .presenters import AutoSavePolicy, DownloadPresenter, ScanPresenter
@@ -39,7 +39,7 @@ class Application:
 
         # 创建QApplication
         self.app = QApplication(sys.argv)
-        self.app.setApplicationName("网站文件自动下载器")
+        self.app.setApplicationName(WINDOW_TITLE)
         self.app.setApplicationVersion(__version__)
 
         # 加载配置
@@ -127,7 +127,7 @@ class Application:
         self._shutdown()
 
     def _shutdown(self) -> bool:
-        """统一退出序列：保存缓存 → 取消进行中任务 → 关闭服务（幂等，主线程调用）
+        """统一退出序列：保存配置/缓存 → 取消进行中任务 → 关闭服务（幂等，主线程调用）
 
         Returns:
             True 表示本次执行了退出序列（重复调用返回 False）
@@ -137,7 +137,11 @@ class Application:
         self._shutdown_done = True
         if self._shutdown_timer is not None:
             self._shutdown_timer.stop()
-        logger.info("应用退出，保存缓存...")
+        logger.info("应用退出，保存配置与缓存...")
+        # 窗口尺寸持久化（视图层不再直接写盘）
+        self.config.window_width = self.window.width()
+        self.config.window_height = self.window.height()
+        self.config.save()
         self.cache_manager.save()
         self.scan_controller.cancel_size_prefetch()
         self.scan_controller.cancel_scan()

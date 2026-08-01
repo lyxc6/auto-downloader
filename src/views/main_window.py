@@ -4,6 +4,7 @@ from PySide6.QtCore import QSize, Signal
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import FluentWindow, NavigationItemPosition, Theme, setTheme
 
+from .. import WINDOW_TITLE
 from ..models import AppConfig
 from .download_panel import DownloadPanel
 from .queue_panel import QueuePanel
@@ -20,7 +21,7 @@ class MainWindow(FluentWindow):
         self.config = config
 
         # 设置窗口属性
-        self.setWindowTitle("网站文件自动下载器")
+        self.setWindowTitle(WINDOW_TITLE)
         self.resize(config.window_width, config.window_height)
         self.setMinimumSize(QSize(900, 600))
 
@@ -46,17 +47,10 @@ class MainWindow(FluentWindow):
 
     def apply_theme(self, theme: str):
         """应用主题"""
-        if theme == "dark":
-            setTheme(Theme.DARK)
-        elif theme == "light":
-            setTheme(Theme.LIGHT)
-        else:
-            setTheme(Theme.AUTO)
+        theme_map = {"dark": Theme.DARK, "light": Theme.LIGHT}
+        setTheme(theme_map.get(theme, Theme.AUTO))
 
     def closeEvent(self, e):
-        """关闭事件"""
+        """关闭事件：通知应用层执行退出序列（尺寸持久化由 app.py 统一处理）"""
         self.closing.emit()
-        self.config.window_width = self.width()
-        self.config.window_height = self.height()
-        self.config.save()
         e.accept()

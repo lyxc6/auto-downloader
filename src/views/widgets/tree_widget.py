@@ -10,6 +10,131 @@ from ...models import DownloadItem
 from ...utils.helpers import format_size
 
 
+class TreeIndex:
+    """树数据索引：全量项 / 父子索引 / 加载状态 / 未扫描目录的统一管理
+
+    四个平行结构必须保持同步，所有增删改统一经由此类，
+    避免树组件内部多处手工维护导致状态漂移。
+    """
+
+    def __init__(self):
+        self._all_items: dict[str, DownloadItem] = {}
+        self._children_index: dict[str, list[str]] = {}
+        self._loaded: set[str] = set()
+        self._unscanned_dirs: set[str] = set()
+
+    # ==================== 只读访问（供 Qt 层查询） ====================
+
+    @property
+    def all_items(self) -> dict[str, DownloadItem]:
+        return self._all_items
+
+    @property
+    def children_index(self) -> dict[str, list[str]]:
+        return self._children_index
+
+    @property
+    def loaded(self) -> set[str]:
+        return self._loaded
+
+    @property
+    def unscanned_dirs(self) -> set[str]:
+        return self._unscanned_dirs
+
+    def has(self, item_id: str) -> bool:
+        return item_id in self._all_items
+
+    def get(self, item_id: str) -> DownloadItem | None:
+        return self._all_items.get(item_id)
+
+    @staticmethod
+    def sort_key(item: DownloadItem) -> tuple:
+        """排序键：目录优先，按名称字母顺序"""
+        return (0 if item.is_dir else 1, item.name.lower())
+
+    # ==================== 增删改（统一入口） ====================
+
+    def load_all(self, items_dict: dict[str, DownloadItem]) -> None:
+        """全量重建索引（load_from_items / 缓存恢复场景）"""
+        self._all_items = dict(items_dict)
+        self._children_index = {}
+        for item in self._all_items.values():
+            self._children_index.setdefault(item.parent_id, []).append(item.item_id)
+        for child_ids in self._children_index.values():
+            child_ids.sort(key=lambda cid: self.sort_key(self._all_items[cid]))
+        self._loaded = set()
+        self._unscanned_dirs = set()
+
+    def add_item(self, item: DownloadItem) -> bool:
+        """增量添加（实时扫描 / 节流批量路径共用）
+
+        目录项自动进入未扫描集合（与 add_items_batch 保持一致）。
+        Returns:
+            True 表示真正新增，False 表示已存在
+        """
+        if item.item_id in self._all_items:
+            return False
+        self._all_items[item.item_id] = item
+        self._children_index.setdefault(item.parent_id, []).append(item.item_id)
+        if item.is_dir:
+            self._unscanned_dirs.add(item.item_id)
+        return True
+
+    def set_unscanned_dirs(self, dirs: set[str]) -> None:
+        """整体替换未扫描集合（apply_scan_status 场景）"""
+        self._unscanned_dirs = set(dirs)
+
+    def mark_dir_scanned(self, dir_id: str) -> None:
+        """单个目录扫描完成：从未扫描集合移除"""
+        self._unscanned_dirs.discard(dir_id)
+
+    def file_descendants(self, item_id: str) -> list[str]:
+        """BFS 索引收集所有文件后代 item_id"""
+        result: list[str] = []
+        queue = deque(self._children_index.get(item_id, []))
+        while queue:
+            cid = queue.popleft()
+            item = self._all_items[cid]
+            if item.is_file:
+                result.append(cid)
+            else:
+                queue.extend(self._children_index.get(cid, []))
+        return result
+
+    def remove_descendants(self, dir_item_id: str) -> set[str]:
+        """移除目录的所有后代（含子目录和文件），保留目录自身
+
+        Returns:
+            被移除的 item_id 集合
+        """
+        descendant_ids: set[str] = set()
+        queue = deque(self._children_index.get(dir_item_id, []))
+        while queue:
+            cid = queue.popleft()
+            descendant_ids.add(cid)
+            queue.extend(self._children_index.get(cid, []))
+
+        for did in descendant_ids:
+            self._all_items.pop(did, None)
+            self._children_index.pop(did, None)
+            self._loaded.discard(did)
+            self._unscanned_dirs.discard(did)
+
+        # 目录自身的孩子列表已清空
+        self._children_index.pop(dir_item_id, None)
+        self._loaded.discard(dir_item_id)
+        self._unscanned_dirs.discard(dir_item_id)
+
+        return descendant_ids
+
+    def clear(self) -> None:
+        """清空全部索引"""
+        self._all_items.clear()
+        self._children_index.clear()
+        self._loaded.clear()
+        self._unscanned_dirs.clear()
+
+
 class DownloadTreeWidget(TreeWidget):
     """下载树形组件（虚拟加载）"""
 
@@ -18,12 +143,9 @@ class DownloadTreeWidget(TreeWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._items: dict[str, QTreeWidgetItem] = {}
-        self._all_items: dict[str, DownloadItem] = {}
-        self._children_index: dict[str, list[str]] = {}
-        self._loaded: set[str] = set()
-        self._checked_set: set[str] = set()
-        self._unscanned_dirs: set[str] = set()
+        self._index = TreeIndex()
+        self._items: dict[str, QTreeWidgetItem] = {}  # realized 节点（item_id -> QTreeWidgetItem）
+        self._checked_set: set[str] = set()  # 勾选真值源（与 realize 状态无关）
         self._updating = False
         self._batch_expanding = False
         self.setHeaderLabels(["名称", "类型", "大小"])
@@ -35,24 +157,31 @@ class DownloadTreeWidget(TreeWidget):
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
 
-    @staticmethod
-    def _sort_key(item: DownloadItem) -> tuple:
-        """排序键：目录优先，按名称字母顺序"""
-        return (0 if item.is_dir else 1, item.name.lower())
+    # ==================== 兼容只读视图（测试与外部内省用） ====================
+
+    @property
+    def _all_items(self) -> dict[str, DownloadItem]:
+        return self._index.all_items
+
+    @property
+    def _children_index(self) -> dict[str, list[str]]:
+        return self._index.children_index
+
+    @property
+    def _loaded(self) -> set[str]:
+        return self._index.loaded
+
+    @property
+    def _unscanned_dirs(self) -> set[str]:
+        return self._index.unscanned_dirs
 
     def load_from_items(self, items_dict: dict[str, DownloadItem]) -> None:
         """一次性接收全量项，预建索引，仅 realize 根节点"""
         self.clear_all()
-        self._all_items = dict(items_dict)
-        self._children_index = {}
-        for item in self._all_items.values():
-            self._children_index.setdefault(item.parent_id, []).append(item.item_id)
-        for child_ids in self._children_index.values():
-            child_ids.sort(key=lambda cid: self._sort_key(self._all_items[cid]))
-        self._checked_set = set()
+        self._index.load_all(items_dict)
         self._updating = True
         try:
-            for cid in self._children_index.get("", []):
+            for cid in self._index.children_index.get("", []):
                 self._realize_node(cid, None)
         finally:
             self._updating = False
@@ -82,7 +211,7 @@ class DownloadTreeWidget(TreeWidget):
 
     def apply_scan_status(self, unscanned_dirs: set[str]) -> None:
         """更新目录节点的扫描状态图标"""
-        self._unscanned_dirs = set(unscanned_dirs)
+        self._index.set_unscanned_dirs(unscanned_dirs)
         for item_id, tw in self._items.items():
             item = self._all_items.get(item_id)
             if item and item.is_dir:
@@ -90,7 +219,7 @@ class DownloadTreeWidget(TreeWidget):
 
     def mark_dir_scanned(self, dir_id: str) -> None:
         """单个目录扫描完成：从未扫描集合移除并更新图标"""
-        self._unscanned_dirs.discard(dir_id)
+        self._index.mark_dir_scanned(dir_id)
         tw = self._items.get(dir_id)
         if tw is not None:
             tw.setText(1, self._dir_icon(dir_id))
@@ -100,7 +229,7 @@ class DownloadTreeWidget(TreeWidget):
         child_ids = self._children_index.get(parent_id)
         if not child_ids or len(child_ids) <= 1:
             return
-        child_ids.sort(key=lambda cid: self._sort_key(self._all_items[cid]))
+        child_ids.sort(key=lambda cid: self._index.sort_key(self._all_items[cid]))
         if parent_id == "":
             self._reorder_top_level_items(child_ids)
         elif parent_id in self._loaded:
@@ -155,25 +284,12 @@ class DownloadTreeWidget(TreeWidget):
         finally:
             self._updating = False
 
-    def _file_descendants(self, item_id):
-        """BFS 索引收集所有文件后代 item_id"""
-        result = []
-        queue = deque(self._children_index.get(item_id, []))
-        while queue:
-            cid = queue.popleft()
-            item = self._all_items[cid]
-            if item.is_file:
-                result.append(cid)
-            else:
-                queue.extend(self._children_index.get(cid, []))
-        return result
-
     def _compute_check_state(self, item_id):
         """从 _checked_set + 索引计算三态（不依赖 realized 子节点）"""
         item = self._all_items[item_id]
         if item.is_file:
             return Qt.CheckState.Checked if item_id in self._checked_set else Qt.CheckState.Unchecked
-        files = self._file_descendants(item_id)
+        files = self._index.file_descendants(item_id)
         if not files:
             return Qt.CheckState.Unchecked
         checked_count = sum(1 for f in files if f in self._checked_set)
@@ -185,10 +301,8 @@ class DownloadTreeWidget(TreeWidget):
 
     def add_item(self, item: DownloadItem):
         """增量添加（实时扫描路径）：更新索引，按需 realize"""
-        if item.item_id in self._all_items:
+        if not self._index.add_item(item):
             return
-        self._all_items[item.item_id] = item
-        self._children_index.setdefault(item.parent_id, []).append(item.item_id)
         self._updating = True
         try:
             parent_tw = self._items.get(item.parent_id)
@@ -207,13 +321,9 @@ class DownloadTreeWidget(TreeWidget):
         self._updating = True
         try:
             for item in items_list:
-                if item.item_id in self._all_items:
+                if not self._index.add_item(item):
                     continue
-                self._all_items[item.item_id] = item
-                self._children_index.setdefault(item.parent_id, []).append(item.item_id)
                 affected_parents.add(item.parent_id)
-                if item.is_dir:
-                    self._unscanned_dirs.add(item.item_id)
                 parent_tw = self._items.get(item.parent_id)
                 if item.parent_id == "":
                     self._realize_node(item.item_id, None)
@@ -227,7 +337,7 @@ class DownloadTreeWidget(TreeWidget):
             self._updating = False
 
     def is_checked(self, item_id: str) -> bool:
-        """是否选中"""
+        """是否选中（半选状态返回 False）"""
         tw = self._items.get(item_id)
         if tw is not None:
             return tw.checkState(0) == Qt.CheckState.Checked
@@ -272,7 +382,7 @@ class DownloadTreeWidget(TreeWidget):
         self._updating = True
         try:
             item = self._all_items[item_id]
-            files = [item_id] if item.is_file else self._file_descendants(item_id)
+            files = [item_id] if item.is_file else self._index.file_descendants(item_id)
             if checked:
                 self._checked_set.update(files)
             else:
@@ -345,11 +455,8 @@ class DownloadTreeWidget(TreeWidget):
         """清空所有"""
         self.clear()
         self._items.clear()
-        self._all_items.clear()
-        self._children_index.clear()
-        self._loaded.clear()
+        self._index.clear()
         self._checked_set.clear()
-        self._unscanned_dirs.clear()
 
     def _show_context_menu(self, pos):
         """显示右键菜单"""
@@ -370,52 +477,40 @@ class DownloadTreeWidget(TreeWidget):
         menu.addAction(refresh_action)
         menu.exec_(self.viewport().mapToGlobal(pos))
 
+    def _remove_realized_children(self, dir_item_id: str) -> None:
+        """移除已 realized 的后代节点（Qt 层，含 C++ 对象已删除防御）"""
+        tree_item = self._items.get(dir_item_id)
+        if tree_item is None:
+            return
+        realized_desc: set[str] = set()
+
+        def _collect_realized(tw_item, acc: set):
+            for i in range(tw_item.childCount()):
+                child = tw_item.child(i)
+                cid = child.data(0, Qt.ItemDataRole.UserRole)
+                if cid is not None:
+                    acc.add(cid)
+                _collect_realized(child, acc)
+
+        _collect_realized(tree_item, realized_desc)
+        for did in realized_desc:
+            tw = self._items.pop(did, None)
+            if tw is not None:
+                try:
+                    parent = tw.parent()
+                except RuntimeError:
+                    continue  # C++ 对象已删除（因父节点被移除时连带销毁）
+                if parent is not None:
+                    parent.removeChild(tw)
+                else:
+                    idx = self.indexOfTopLevelItem(tw)
+                    if idx >= 0:
+                        self.takeTopLevelItem(idx)
+
     def remove_children_of(self, dir_item_id: str) -> set[str]:
         """移除指定目录的所有子节点（含后代），保留目录自身。返回被移除的 item_id 集合"""
-        descendant_ids: set[str] = set()
-        queue = deque(self._children_index.get(dir_item_id, []))
-        while queue:
-            cid = queue.popleft()
-            descendant_ids.add(cid)
-            queue.extend(self._children_index.get(cid, []))
-
-        tree_item = self._items.get(dir_item_id)
-        if tree_item is not None:
-            realized_desc: set[str] = set()
-
-            def _collect_realized(tw_item, acc: set):
-                for i in range(tw_item.childCount()):
-                    child = tw_item.child(i)
-                    cid = child.data(0, Qt.ItemDataRole.UserRole)
-                    if cid is not None:
-                        acc.add(cid)
-                    _collect_realized(child, acc)
-
-            _collect_realized(tree_item, realized_desc)
-            for did in realized_desc:
-                tw = self._items.pop(did, None)
-                if tw is not None:
-                    try:
-                        parent = tw.parent()
-                    except RuntimeError:
-                        continue  # C++ 对象已删除（因父节点被移除时连带销毁）
-                    if parent is not None:
-                        parent.removeChild(tw)
-                    else:
-                        idx = self.indexOfTopLevelItem(tw)
-                        if idx >= 0:
-                            self.takeTopLevelItem(idx)
-
-        for did in descendant_ids:
-            self._all_items.pop(did, None)
-            self._children_index.pop(did, None)
-            self._loaded.discard(did)
-            self._checked_set.discard(did)
-            self._unscanned_dirs.discard(did)
-
-        self._children_index.pop(dir_item_id, None)
-        self._loaded.discard(dir_item_id)
-        self._unscanned_dirs.discard(dir_item_id)
+        descendant_ids = self._index.remove_descendants(dir_item_id)
+        self._remove_realized_children(dir_item_id)
 
         tree_item = self._items.get(dir_item_id)
         if tree_item is not None and dir_item_id in self._all_items:

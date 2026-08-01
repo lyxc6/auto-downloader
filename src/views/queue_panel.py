@@ -29,6 +29,14 @@ _STATUS_META: dict[str, tuple[str, FluentSystemColor]] = {
     "cancelled": ("已取消", FluentSystemColor.CRITICAL_FOREGROUND),
 }
 
+# 统计计数的状态键集合（_STATUS_META 中的状态键 + cancelled 对齐统计口径）
+_STATS_KEYS: tuple[str, ...] = ("pending", "downloading", "completed", "failed", "skipped", "cancelled")
+
+
+def _new_stats() -> dict[str, int]:
+    """创建全零统计字典"""
+    return {key: 0 for key in _STATS_KEYS}
+
 
 class QueuePanel(QWidget):
     """下载队列面板"""
@@ -37,7 +45,7 @@ class QueuePanel(QWidget):
         super().__init__(parent)
         self.setObjectName("queuePanel")
         self._items = {}  # item_id -> {"row": int, "status_item": QTableWidgetItem, "progress_bar": ProgressBar, "pct_item": QTableWidgetItem}
-        self._stats = {"pending": 0, "completed": 0, "failed": 0, "skipped": 0, "downloading": 0}
+        self._stats = _new_stats()
         self._setup_ui()
         qconfig.themeChanged.connect(self._on_theme_changed)
 
@@ -92,7 +100,7 @@ class QueuePanel(QWidget):
         layout.addWidget(self.table_widget)
 
         # 连接信号
-        self.clear_btn.clicked.connect(self.clear)
+        self.clear_btn.clicked.connect(self.confirm_clear)
 
     def add_item(self, item_id: str, name: str):
         """添加队列项"""
@@ -106,9 +114,10 @@ class QueuePanel(QWidget):
         name_item = QTableWidgetItem(name)
         self.table_widget.setItem(row, 0, name_item)
 
-        # 状态列
-        status_item = QTableWidgetItem("等待中")
-        status_item.setForeground(QColor("gray"))
+        # 状态列（统一走 _STATUS_META 映射）
+        status_text, color_enum = _STATUS_META["pending"]
+        status_item = QTableWidgetItem(status_text)
+        status_item.setForeground(QColor(color_enum.color().name()))
         self.table_widget.setItem(row, 1, status_item)
 
         # 进度条列
@@ -167,7 +176,14 @@ class QueuePanel(QWidget):
         self._update_stats_labels()
 
     def clear(self):
-        """清空列表"""
+        """纯清空列表（不弹确认框，供外部确定性调用）"""
+        self.table_widget.setRowCount(0)
+        self._items.clear()
+        self._stats = _new_stats()
+        self._update_stats_labels()
+
+    def confirm_clear(self):
+        """弹确认框后清空列表（清空按钮入口）"""
         dialog = MessageDialog(
             "确认清空",
             "确定要清空下载队列吗？正在下载的任务将失去可见性。",
@@ -177,10 +193,7 @@ class QueuePanel(QWidget):
         dialog.cancelButton.setText("取消")
 
         if dialog.exec():
-            self.table_widget.setRowCount(0)
-            self._items.clear()
-            self._stats = {"pending": 0, "completed": 0, "failed": 0, "skipped": 0, "downloading": 0}
-            self._update_stats_labels()
+            self.clear()
 
     def _update_stats_labels(self):
         """更新统计标签"""

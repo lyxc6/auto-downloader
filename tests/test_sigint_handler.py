@@ -19,6 +19,7 @@ def app_obj():
     """部分构造 Application，仅注入测试所需依赖，避免完整 GUI 与真实 QApplication"""
     obj = Application.__new__(Application)
     obj.app = MagicMock()
+    obj.window = MagicMock()
     obj.cache_manager = MagicMock()
     obj.scan_controller = MagicMock()
     obj.download_controller = MagicMock()

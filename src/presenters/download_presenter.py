@@ -47,7 +47,7 @@ class DownloadPresenter(QObject):
 
         # 视图 → presenter
         view.download_requested.connect(self._on_download_requested)
-        view.stop_download_btn.clicked.connect(controller.cancel_download)
+        view.stop_download_clicked.connect(controller.cancel_download)
 
         # 控制器信号 → 视图（无需状态转换，直连）
         controller.log_message.connect(view.add_log)

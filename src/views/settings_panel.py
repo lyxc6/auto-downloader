@@ -1,8 +1,10 @@
 """设置面板"""
 
+from collections.abc import Callable
+
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFileDialog, QVBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
     ComboBoxSettingCard,
@@ -25,6 +27,10 @@ from qfluentwidgets.common.config import OptionsConfigItem, OptionsValidator
 from .. import __version__
 from ..models import AppConfig
 from ..services.update_logic import GITHUB_RELEASES_URL
+
+# 主题字符串 ↔ Fluent Theme 枚举映射（唯一真值源）
+_THEME_TO_STR: dict[Theme, str] = {Theme.LIGHT: "light", Theme.DARK: "dark", Theme.AUTO: "auto"}
+_STR_TO_THEME: dict[str, Theme] = {"light": Theme.LIGHT, "dark": Theme.DARK, "auto": Theme.AUTO}
 
 
 class SpinBoxSettingCard(SettingCard):
@@ -73,8 +79,6 @@ class FolderSettingCard(SettingCard):
         self.hBoxLayout.addSpacing(16)
 
     def _select_folder(self):
-        from PySide6.QtWidgets import QFileDialog
-
         folder = QFileDialog.getExistingDirectory(self, "选择下载目录", self.folder)
         if folder:
             self.folder = folder
@@ -117,7 +121,24 @@ class SettingsPanel(QWidget):
         title = StrongBodyLabel("设置")
         scroll_layout.addWidget(title)
 
-        # 下载设置组
+        scroll_layout.addWidget(self._build_download_group())
+        scroll_layout.addWidget(self._build_scan_group())
+        scroll_layout.addWidget(self._build_ui_group())
+        scroll_layout.addWidget(self._build_update_group())
+
+        scroll_layout.addStretch()
+
+        scroll_area.setWidget(scroll_widget)
+        scroll_area.setStyleSheet("background: transparent;")
+        scroll_area.viewport().setStyleSheet("background: transparent;")
+        scroll_widget.setStyleSheet("background: transparent;")
+        layout.addWidget(scroll_area)
+
+        # 连接信号
+        self._connect_signals()
+
+    def _build_download_group(self) -> SettingCardGroup:
+        """下载设置组"""
         download_group = SettingCardGroup("下载设置", self)
 
         self.folder_card = FolderSettingCard(
@@ -138,9 +159,10 @@ class SettingsPanel(QWidget):
         download_group.addSettingCard(self.retry_card)
         download_group.addSettingCard(self.timeout_card)
 
-        scroll_layout.addWidget(download_group)
+        return download_group
 
-        # 扫描设置组
+    def _build_scan_group(self) -> SettingCardGroup:
+        """扫描设置组"""
         scan_group = SettingCardGroup("扫描设置", self)
 
         self.depth_card = SpinBoxSettingCard(1, 50, 1, FIF.TILES, "最大扫描深度", "递归扫描的最大深度", self)
@@ -160,17 +182,16 @@ class SettingsPanel(QWidget):
             texts=["深度优先", "广度优先"],
             parent=self,
         )
-        scan_mode_map = {"dfs": "dfs", "bfs": "bfs"}
-        saved_mode = scan_mode_map.get(self.config.scan_mode, "dfs")
-        self.scan_mode_config_item.value = saved_mode
+        self.scan_mode_config_item.value = self.config.scan_mode
 
         scan_group.addSettingCard(self.depth_card)
         scan_group.addSettingCard(self.scan_workers_card)
         scan_group.addSettingCard(self.scan_mode_card)
 
-        scroll_layout.addWidget(scan_group)
+        return scan_group
 
-        # 界面设置组
+    def _build_ui_group(self) -> SettingCardGroup:
+        """界面设置组"""
         ui_group = SettingCardGroup("界面设置", self)
 
         self.themeConfigItem = OptionsConfigItem(
@@ -185,15 +206,13 @@ class SettingsPanel(QWidget):
             parent=self,
         )
 
-        theme_map = {"light": Theme.LIGHT, "dark": Theme.DARK, "auto": Theme.AUTO}
-        saved_theme = theme_map.get(self.config.theme, Theme.AUTO)
-        self.themeConfigItem.value = saved_theme
+        self.themeConfigItem.value = _STR_TO_THEME.get(self.config.theme, Theme.AUTO)
 
         ui_group.addSettingCard(self.theme_card)
+        return ui_group
 
-        scroll_layout.addWidget(ui_group)
-
-        # 软件更新组
+    def _build_update_group(self) -> SettingCardGroup:
+        """软件更新组"""
         update_group = SettingCardGroup("软件更新", self)
 
         # 版本信息卡片
@@ -218,9 +237,7 @@ class SettingsPanel(QWidget):
             texts=["稳定版", "测试版"],
             parent=self,
         )
-        channel_map = {"stable": "stable", "test": "test"}
-        saved_channel = channel_map.get(self.config.update_channel, "stable")
-        self.channel_config_item.value = saved_channel
+        self.channel_config_item.value = self.config.update_channel
 
         # 自动检查更新卡片
         self.auto_check_card = SettingCard(FIF.UPDATE, "自动检查更新", "启动时自动检查是否有新版本", self)
@@ -241,76 +258,43 @@ class SettingsPanel(QWidget):
         update_group.addSettingCard(self.auto_check_card)
         update_group.addSettingCard(self.check_btn_card)
 
-        scroll_layout.addWidget(update_group)
-
-        scroll_layout.addStretch()
-
-        scroll_area.setWidget(scroll_widget)
-        scroll_area.setStyleSheet("background: transparent;")
-        scroll_area.viewport().setStyleSheet("background: transparent;")
-        scroll_widget.setStyleSheet("background: transparent;")
-        layout.addWidget(scroll_area)
-
-        # 连接信号
-        self._connect_signals()
+        return update_group
 
     def _connect_signals(self):
-        """连接信号"""
-        self.folder_card.folderChanged.connect(self._on_folder_changed)
-        self.workers_card.valueChanged.connect(self._on_workers_changed)
-        self.retry_card.valueChanged.connect(self._on_retry_changed)
-        self.timeout_card.valueChanged.connect(self._on_timeout_changed)
-        self.depth_card.valueChanged.connect(self._on_depth_changed)
-        self.scan_workers_card.valueChanged.connect(self._on_scan_workers_changed)
-        self.scan_mode_config_item.valueChanged.connect(self._on_scan_mode_changed)
+        """连接信号（表驱动：卡片信号 → config 属性 + config_changed）"""
+        # (信号源, config属性名) —— 变更值直接写入对应属性并通知
+        bindings = [
+            (self.workers_card.valueChanged, "max_workers"),
+            (self.retry_card.valueChanged, "retry_times"),
+            (self.timeout_card.valueChanged, "timeout"),
+            (self.depth_card.valueChanged, "max_depth"),
+            (self.scan_workers_card.valueChanged, "scan_max_workers"),
+            (self.scan_mode_config_item.valueChanged, "scan_mode"),
+            (self.channel_config_item.valueChanged, "update_channel"),
+            (self.auto_check_switch.checkedChanged, "auto_check_update"),
+        ]
+        for signal, attr in bindings:
+            signal.connect(self._make_config_handler(attr))
+
+        self.folder_card.folderChanged.connect(self._make_config_handler("download_dir"))
         self.theme_card.optionChanged.connect(self._on_theme_changed)
-        self.channel_config_item.valueChanged.connect(self._on_channel_changed)
-        self.auto_check_switch.checkedChanged.connect(self._on_auto_check_changed)
         self.check_btn.clicked.connect(self._on_check_update_clicked)
 
-    def _on_folder_changed(self, folder: str):
-        self.config.download_dir = folder
-        self.config_changed.emit({"download_dir": folder})
+    def _make_config_handler(self, attr: str) -> Callable:
+        """生成配置变更处理器：写 config 属性并 emit config_changed"""
 
-    def _on_workers_changed(self, value: int):
-        self.config.max_workers = value
-        self.config_changed.emit({"max_workers": value})
+        def handler(value):
+            setattr(self.config, attr, value)
+            self.config_changed.emit({attr: value})
 
-    def _on_retry_changed(self, value: int):
-        self.config.retry_times = value
-        self.config_changed.emit({"retry_times": value})
-
-    def _on_timeout_changed(self, value: int):
-        self.config.timeout = value
-        self.config_changed.emit({"timeout": value})
-
-    def _on_depth_changed(self, value: int):
-        self.config.max_depth = value
-        self.config_changed.emit({"max_depth": value})
-
-    def _on_scan_workers_changed(self, value: int):
-        self.config.scan_max_workers = value
-        self.config_changed.emit({"scan_max_workers": value})
-
-    def _on_scan_mode_changed(self, value):
-        self.config.scan_mode = value
-        self.config_changed.emit({"scan_mode": value})
+        return handler
 
     def _on_theme_changed(self, configItem):
         theme_value = configItem.value
-        theme_map = {Theme.LIGHT: "light", Theme.DARK: "dark", Theme.AUTO: "auto"}
-        theme = theme_map.get(theme_value, "auto")
+        theme = _THEME_TO_STR.get(theme_value, "auto")
         self.config.theme = theme
         self.theme_changed.emit(theme)
         self.config_changed.emit({"theme": theme})
-
-    def _on_channel_changed(self, value):
-        self.config.update_channel = value
-        self.config_changed.emit({"update_channel": value})
-
-    def _on_auto_check_changed(self, checked: bool):
-        self.config.auto_check_update = checked
-        self.config_changed.emit({"auto_check_update": checked})
 
     def _on_check_update_clicked(self):
         """检查更新按钮点击"""

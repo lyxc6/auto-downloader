@@ -48,9 +48,9 @@ class ScanPresenter(QObject):
         view.scan_requested.connect(self._on_scan_requested)
         view.refresh_requested.connect(self._on_refresh_requested)
         view.refresh_directory_requested.connect(self._on_directory_refresh_requested)
-        view.stop_scan_btn.clicked.connect(controller.cancel_scan)
+        view.stop_scan_clicked.connect(controller.cancel_scan)
         view.checked_changed.connect(self._on_checked_changed)
-        view.url_input.textChanged.connect(self._on_url_text_changed)
+        view.url_text_changed.connect(self._on_url_text_changed)
 
         # 控制器信号 → 视图（无需状态转换，直连）
         controller.items_found.connect(view.add_items_batch)
@@ -79,7 +79,7 @@ class ScanPresenter(QObject):
 
     def update_scan_button(self):
         """根据缓存状态更新扫描按钮文字（扫描目录 / 继续扫描）"""
-        url = self._view.url_input.text().strip()
+        url = self._view.get_url_text()
         has_cache = self._cache_manager.has_data_for(url)
         scan_done = self._cache_manager.is_scan_complete()
         self._view.set_scan_button_mode(has_cache and not scan_done)
@@ -94,9 +94,9 @@ class ScanPresenter(QObject):
         self._config.last_url = url
         self._config.save()
 
-        self._view.log_widget.clear()
+        self._view.clear_log()
         self._view.set_scanning(True)
-        self._view.download_btn.setEnabled(False)
+        self._view.set_download_enabled(False)
         self._auto_save.start()
 
         # 默认启用并行扫描（scan_max_workers > 1 时）
@@ -115,9 +115,9 @@ class ScanPresenter(QObject):
         self._config.last_url = url
         self._config.save()
 
-        self._view.log_widget.clear()
+        self._view.clear_log()
         self._view.set_scanning(True)
-        self._view.download_btn.setEnabled(False)
+        self._view.set_download_enabled(False)
         self._auto_save.start()
 
         # 默认启用并行扫描
@@ -145,7 +145,7 @@ class ScanPresenter(QObject):
         self._view.update_stats(stats.total_files, stats.total_dirs, stats.checked_count)
 
         self._view.set_scanning(True)
-        self._view.download_btn.setEnabled(False)
+        self._view.set_download_enabled(False)
         self._auto_save.start()
 
         parallel = self._config.scan_max_workers > 1
@@ -161,7 +161,7 @@ class ScanPresenter(QObject):
 
         stats = self._cache_manager.get_stats()
         self._view.update_stats(stats.total_files, stats.total_dirs, stats.checked_count)
-        self._view.download_btn.setEnabled(stats.total_files > 0)
+        self._view.set_download_enabled(stats.total_files > 0)
         self.update_scan_button()
 
         # 显示目录扫描状态
@@ -174,7 +174,7 @@ class ScanPresenter(QObject):
     def _on_scan_completed(self, file_count: int, dir_count: int, dir_path: str = ""):
         """扫描完成"""
         self._view.set_scanning(False)
-        self._view.download_btn.setEnabled(file_count > 0)
+        self._view.set_download_enabled(file_count > 0)
 
         # 更新统计
         stats = self._cache_manager.get_stats()

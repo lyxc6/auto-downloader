@@ -115,6 +115,10 @@ from PySide6.QtWidgets import QPushButton, QLineEdit
 - Tree widget uses virtual loading for large datasets (lazy expansion)
 - AppConfig is the single source of truth for settings; views only emit `config_changed`, app.py persists
 - CacheManager locks internally; callers must use snapshot methods (`checked_items_snapshot`) instead of touching raw sets
+- Window size persistence happens in app.py `_shutdown()` (MainWindow.closeEvent only emits `closing`)
+- `DownloadTreeWidget` keeps data indexes in a `TreeIndex` object (all_items/children_index/loaded/unscanned_dirs); Qt nodes (`_items`) and check-state truth source (`_checked_set`) stay on the widget
+- `DownloadPanel`/`SettingsPanel` expose methods/signals (not raw widgets) to presenters; avoid reaching into `download_btn`, `log_widget`, `url_input` from outside
+- `SettingsPanel` config handlers are table-driven (`_make_config_handler`); theme string↔enum mapping lives in `_THEME_TO_STR`/`_STR_TO_THEME`
 
 ## Conventions
 

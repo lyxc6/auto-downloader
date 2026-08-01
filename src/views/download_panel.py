@@ -18,6 +18,7 @@ from qfluentwidgets import (
     qconfig,
 )
 
+from .. import WINDOW_TITLE
 from ..models import AppConfig, DownloadItem
 from .widgets.log_widget import LogWidget
 from .widgets.tree_widget import DownloadTreeWidget
@@ -31,7 +32,10 @@ class DownloadPanel(QWidget):
     refresh_requested = Signal(str)  # 强制刷新url
     refresh_directory_requested = Signal(str)  # item_id：刷新单个目录
     download_requested = Signal()  # 开始下载
+    stop_scan_clicked = Signal()  # 停止扫描按钮
+    stop_download_clicked = Signal()  # 停止下载按钮
     checked_changed = Signal(set)  # 勾选集合变化（来自树控件实时同步）
+    url_text_changed = Signal(str)  # URL 输入变化
 
     def __init__(self, config: AppConfig, parent: QWidget | None = None):
         super().__init__(parent)
@@ -46,12 +50,23 @@ class DownloadPanel(QWidget):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(15)
 
-        # 标题
-        title_label = StrongBodyLabel("网站文件自动下载器")
-        title_label.setFont(QFont("Microsoft YaHei", 16, QFont.Weight.Bold))
-        layout.addWidget(title_label)
+        layout.addWidget(self._build_title())
+        layout.addWidget(self._build_url_card())
+        layout.addWidget(self._build_splitter(), 1)
+        layout.addWidget(self._build_bottom_card())
 
-        # URL输入区域
+        # 初始化分割器样式并连接主题变化信号
+        self._update_splitter_style()
+        qconfig.themeChanged.connect(self._on_theme_changed)
+
+    def _build_title(self) -> StrongBodyLabel:
+        """标题"""
+        title_label = StrongBodyLabel(WINDOW_TITLE)
+        title_label.setFont(QFont("Microsoft YaHei", 16, QFont.Weight.Bold))
+        return title_label
+
+    def _build_url_card(self) -> CardWidget:
+        """URL输入区域"""
         url_card = CardWidget(self)
         url_layout = QHBoxLayout(url_card)
         url_layout.setContentsMargins(15, 15, 15, 15)
@@ -73,12 +88,18 @@ class DownloadPanel(QWidget):
         url_layout.addWidget(self.refresh_btn)
         url_layout.addWidget(self.stop_scan_btn)
 
-        layout.addWidget(url_card)
+        return url_card
 
-        # 主内容区域（使用分割器）
+    def _build_splitter(self) -> QSplitter:
+        """主内容区域（目录树 + 日志）"""
         self.splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        self.splitter.addWidget(self._build_tree_panel())
+        self.splitter.addWidget(self._build_log_panel())
+        self.splitter.setSizes([600, 400])
+        return self.splitter
 
-        # 左侧：目录树
+    def _build_tree_panel(self) -> CardWidget:
+        """左侧：目录树"""
         left_panel = CardWidget(self)
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(10, 10, 10, 10)
@@ -107,15 +128,15 @@ class DownloadPanel(QWidget):
         self.stats_label = CaptionLabel("文件: 0 | 目录: 0 | 已选: 0")
         left_layout.addWidget(self.stats_label)
 
-        self.splitter.addWidget(left_panel)
+        return left_panel
 
-        # 右侧：日志和预览
+    def _build_log_panel(self) -> QWidget:
+        """右侧：日志"""
         right_panel = QWidget(self)
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(10)
 
-        # 日志区域
         log_card = CardWidget(self)
         log_layout = QVBoxLayout(log_card)
         log_layout.setContentsMargins(10, 10, 10, 10)
@@ -127,13 +148,10 @@ class DownloadPanel(QWidget):
         log_layout.addWidget(self.log_widget)
 
         right_layout.addWidget(log_card, 1)
+        return right_panel
 
-        self.splitter.addWidget(right_panel)
-        self.splitter.setSizes([600, 400])
-
-        layout.addWidget(self.splitter, 1)
-
-        # 底部按钮区域
+    def _build_bottom_card(self) -> CardWidget:
+        """底部按钮区域"""
         bottom_card = CardWidget(self)
         bottom_layout = QHBoxLayout(bottom_card)
         bottom_layout.setContentsMargins(15, 15, 15, 15)
@@ -155,11 +173,11 @@ class DownloadPanel(QWidget):
         bottom_layout.addStretch()
         bottom_layout.addWidget(self.progress_bar)
 
-        layout.addWidget(bottom_card)
+        return bottom_card
 
-        # 初始化分割器样式并连接主题变化信号
+    def _on_theme_changed(self, _theme):
+        """主题变化：更新分割器配色"""
         self._update_splitter_style()
-        qconfig.themeChanged.connect(lambda _: self._update_splitter_style())
 
     def _update_splitter_style(self):
         """更新分割器样式以适配当前主题"""
@@ -185,6 +203,8 @@ class DownloadPanel(QWidget):
         self.scan_btn.clicked.connect(self._on_scan_clicked)
         self.refresh_btn.clicked.connect(self._on_refresh_clicked)
         self.download_btn.clicked.connect(self.download_requested)
+        self.stop_scan_btn.clicked.connect(self.stop_scan_clicked)
+        self.stop_download_btn.clicked.connect(self.stop_download_clicked)
         self.clear_log_btn.clicked.connect(self.log_widget.clear)
         self.select_all_btn.clicked.connect(self.tree_widget.select_all)
         self.deselect_all_btn.clicked.connect(self.tree_widget.deselect_all)
@@ -192,22 +212,28 @@ class DownloadPanel(QWidget):
         self.collapse_btn.clicked.connect(self.tree_widget.collapse_all_items)
         self.tree_widget.refresh_dir_requested.connect(self.refresh_directory_requested)
         self.tree_widget.checked_ids_changed.connect(self.checked_changed)
+        self.url_input.textChanged.connect(self.url_text_changed)
+
+    def _get_url_or_warn(self) -> str:
+        """读取 URL 并校验，无效时提示并返回空串"""
+        url = self.url_input.text().strip()
+        if not url:
+            InfoBar.error(title="错误", content="请输入目标URL", parent=self, position=InfoBarPosition.TOP)
+        return url
 
     def _on_scan_clicked(self):
         """扫描按钮点击"""
-        url = self.url_input.text().strip()
-        if not url:
-            InfoBar.error(title="错误", content="请输入目标URL", parent=self, position=InfoBarPosition.TOP)
-            return
-        self.scan_requested.emit(url)
+        url = self._get_url_or_warn()
+        if url:
+            self.scan_requested.emit(url)
 
     def _on_refresh_clicked(self):
         """刷新按钮点击"""
-        url = self.url_input.text().strip()
-        if not url:
-            InfoBar.error(title="错误", content="请输入目标URL", parent=self, position=InfoBarPosition.TOP)
-            return
-        self.refresh_requested.emit(url)
+        url = self._get_url_or_warn()
+        if url:
+            self.refresh_requested.emit(url)
+
+    # ==================== 状态方法（供 presenter 调用） ====================
 
     def set_scanning(self, is_scanning: bool):
         """设置扫描状态"""
@@ -225,6 +251,18 @@ class DownloadPanel(QWidget):
         self.download_btn.setEnabled(not is_downloading)
         self.stop_download_btn.setEnabled(is_downloading)
         self.progress_bar.setVisible(is_downloading)
+
+    def set_download_enabled(self, enabled: bool):
+        """启用/禁用下载按钮"""
+        self.download_btn.setEnabled(enabled)
+
+    def get_url_text(self) -> str:
+        """获取当前 URL 文本"""
+        return self.url_input.text().strip()
+
+    def clear_log(self):
+        """清空日志"""
+        self.log_widget.clear()
 
     def update_stats(self, total_files: int, total_dirs: int, checked: int, dirs_scanned: int = -1):
         """更新统计信息"""
