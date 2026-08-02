@@ -10,6 +10,63 @@ from bs4 import BeautifulSoup
 logger = logging.getLogger(__name__)
 
 
+def _decode_dir_name_from_href(href: str) -> str | None:
+    """从目录 href 中解码真实目录名
+
+    服务器列表页的 href 形如 ``?dir=audio%2FC%25E9%2599%2588...``（双重编码），
+    其中的 ``+`` 以 ``%2B`` 表示；而页面显示文本可能把 ``+`` 渲染成空格。
+    从 href 解码可得到与真实路径一致的目录名，避免刷新时 404。
+
+    Args:
+        href: 目录链接的 href 属性
+
+    Returns:
+        解码出的目录名（路径最后一段），失败或无法解析时返回 None
+    """
+    from urllib.parse import unquote
+
+    m = re.search(r"[?&]dir=([^&]+)", href)
+    if not m:
+        return None
+    encoded = m.group(1)
+    try:
+        # dir 参数是双重编码路径（外层 %XX 编码 + 内层 UTF-8 编码）
+        path = unquote(unquote(encoded))
+    except Exception:
+        logger.warning("解码目录 href 失败: %s", href)
+        return None
+    if not path:
+        return None
+    name = path.rstrip("/").rsplit("/", 1)[-1]
+    return name or None
+
+
+def _decode_file_name_from_href(href: str) -> str | None:
+    """从文件 href（完整 URL）中解码真实文件名
+
+    服务器显示文本可能把 ``+`` 渲染成空格（如 ``[WAV CUE]``），而文件 URL
+    中 ``+`` 是字面字符。从 URL 最后一段解码可保留真实字符。
+
+    Args:
+        href: 文件链接的 href 属性（完整 URL 或相对链接）
+
+    Returns:
+        解码出的文件名，失败时返回 None
+    """
+    from urllib.parse import unquote
+
+    if not href or href.startswith("?"):
+        return None
+    try:
+        last = href.rstrip("/").rsplit("/", 1)[-1]
+        if not last or ("=" in last and "?" in last):
+            return None
+        return unquote(last) or None
+    except Exception:
+        logger.warning("解码文件 href 失败: %s", href)
+        return None
+
+
 class HtmlParser:
     """HTML解析器 - 页面内容解析和分页信息提取"""
 
@@ -65,8 +122,21 @@ class HtmlParser:
 
             # 根据 href 判断类型
             if "dir=" in href:
+                # 目录名以 href 中 dir 参数解码为准：
+                # 服务器显示文本可能把 "+" 显示为空格（如 "flac MP3"），
+                # 而 href 中的 dir 参数是双重编码的真实路径（如 "flac%2BMP3"）。
+                # 从 href 解码可避免名称与真实路径不一致，导致刷新时 404。
+                if not data_filename:
+                    dir_name = _decode_dir_name_from_href(href)
+                    if dir_name:
+                        text = dir_name
                 items.append(("dir", text, href))
             else:
+                # 文件名同理：显示文本可能丢失 "+"，从 URL 最后一段解码更可靠
+                if not data_filename:
+                    file_name = _decode_file_name_from_href(href)
+                    if file_name:
+                        text = file_name
                 items.append(("file", text, href))
 
         return items

@@ -469,3 +469,78 @@ class TestParseItemsDataUrl:
         items = service.parse_items(html)
         assert len(items) == 1
         assert items[0] == ("dir", "subfolder", "?dir=subfolder")
+
+
+class TestParseItemsPlusDecoding:
+    """修复回归:目录/文件名中的 + 被错误解码为空格
+
+    服务器显示文本把 "+" 渲染成空格（如 "flac MP3"），而 href 中 dir 参数
+    是双重编码的真实路径（如 "flac%2BMP3"）。解析器应从 href 解码名称，
+    避免缓存名称与真实路径不一致导致刷新时 404。
+    """
+
+    def test_dir_plus_decoded_from_href(self, service):
+        """目录名含 + 时从 href 解码,不采用显示文本的空格版"""
+        html = """
+        <div id="webdav-list">
+            <li style="margin:8px 0;">
+                <a href="?dir=audio%2FC%25E9%2599%2588%25E5%25A5%2595%25E8%25BF%2585%25E6%25AD%258C%25E6%259B%25B2%25E5%2590%2588%25E9%259B%2586%25E3%2580%2590flac%2BMP3%25E5%258F%258C%25E6%25A0%25BC%25E5%25BC%258F%25E3%2580%2591">
+                C陈奕迅歌曲合集【flac MP3双格式】
+                </a>
+            </li>
+        </div>
+        """
+        items = service.parse_items(html)
+        assert len(items) == 1
+        # 显示文本是空格版,应从 href 解码出 + 版
+        assert items[0][1] == "C陈奕迅歌曲合集【flac+MP3双格式】"
+
+    def test_dir_plain_name_kept(self, service):
+        """普通目录名(无 +)保持与显示文本一致"""
+        html = """
+        <div id="webdav-list">
+            <li style="margin:8px 0;"><a href="?dir=folder1">folder1</a></li>
+        </div>
+        """
+        items = service.parse_items(html)
+        assert items[0] == ("dir", "folder1", "?dir=folder1")
+
+    def test_file_plus_decoded_from_url(self, service):
+        """文件名含 + 时从 URL 最后一段解码"""
+        html = """
+        <div id="webdav-list">
+            <li style="margin:8px 0;">
+                <a href="https://example.com/audio/%E9%82%93%E7%B4%AB%E6%A3%8B%5BWAV+CUE%5D.flac">
+                邓紫棋[WAV CUE].flac
+                </a>
+            </li>
+        </div>
+        """
+        items = service.parse_items(html)
+        assert len(items) == 1
+        assert items[0][0] == "file"
+        assert items[0][1] == "邓紫棋[WAV+CUE].flac"
+
+    def test_file_plain_name_kept(self, service):
+        """普通文件名(无 +)保持与显示文本一致"""
+        html = """
+        <div id="webdav-list">
+            <li style="margin:8px 0;"><a href="/webdav/song.flac">song.flac</a></li>
+        </div>
+        """
+        items = service.parse_items(html)
+        assert items[0] == ("file", "song.flac", "/webdav/song.flac")
+
+    def test_dir_with_data_filename_prefers_data_filename(self, service):
+        """data-filename 存在时优先使用它,不从 href 解码"""
+        html = """
+        <div id="webdav-list">
+            <li style="margin:8px 0;">
+                <a href="?dir=some%2Fpath"
+                   data-filename="%E9%99%88%E5%A5%95%E8%BF%85.txt">显示文本</a>
+            </li>
+        </div>
+        """
+        items = service.parse_items(html)
+        assert len(items) == 1
+        assert items[0][1] == "陈奕迅.txt"
