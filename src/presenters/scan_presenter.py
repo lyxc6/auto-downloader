@@ -186,9 +186,8 @@ class ScanPresenter(QObject):
         # 刷新目录扫描状态
         self._view.apply_scan_status(self._cache_manager.get_unscanned_dirs())
 
-        # 扫描完成后启动文件大小预取（并行HEAD请求，目录刷新时仅预取该目录；取消/超时不预取）
-        if file_count > 0 and not self._scan_controller.last_scan_interrupted:
-            self._scan_controller.start_size_prefetch(max_workers=self._config.scan_max_workers, dir_path=dir_path)
+        # 方案B：大小预取已随扫描启动（边扫边取），无需在此额外启动；
+        # 扫描正常完成时 controller 已调用 prefetch.done()，队列耗尽后发 completed
 
     def _on_scan_error(self, error_msg: str):
         """扫描失败"""

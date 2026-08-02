@@ -39,6 +39,8 @@ def _make_service(is_cancelled: bool = False, is_timeout: bool = False) -> Magic
 def controller(monkeypatch):
     c = ScanController(AppConfig(), CacheManager(""))
     c._create_service = lambda: _make_service()
+    # 预取与中断标志测试无关：mock 掉避免真实 HEAD 网络线程污染测试
+    c._prefetch = MagicMock()
     return c
 
 
@@ -91,6 +93,8 @@ def test_start_scan_with_cache_complete_path_clears_flag():
     )
     cache.set_scan_complete(True)
     c = ScanController(AppConfig(), cache)
+    # 预取与本测试无关：mock 掉避免真实 HEAD 网络线程污染其他测试
+    c._prefetch = MagicMock()
     c._scan_interrupted.set()
     c.start_scan_with_cache("http://x")
     assert c.last_scan_interrupted is False

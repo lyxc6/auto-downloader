@@ -80,11 +80,18 @@ class ScanController(QObject):
     def _create_runner(self) -> ScanRunner:
         """创建扫描运行器（节流/计数/进度日志）"""
         runner = ScanRunner(self.cache_manager, clock=monotonic)
-        runner.on_item_found_batch = lambda items: self.items_found.emit(items)
+        runner.on_item_found_batch = self._on_items_found_batch
         runner.on_progress = lambda files, dirs: self.scan_progress.emit(files, dirs)
         runner.on_log = lambda msg, level: self.log_message.emit(msg, level)
         runner.on_dir_scanned = lambda dp: self.dir_scanned.emit(dp)
         return runner
+
+    def _on_items_found_batch(self, items: list) -> None:
+        """批量 item 回调：转发给视图 + 边扫边取（提交文件到大小预取队列）"""
+        for item in items:
+            if item.is_file:
+                self._prefetch.submit(item)
+        self.items_found.emit(items)
 
     def start_scan(
         self,
@@ -135,6 +142,9 @@ class ScanController(QObject):
                 self._service.on_item_found = runner.handle_item
                 self._service.on_dir_scanned = runner.handle_dir_scanned
 
+                # 方案B：边扫边取——启动大小预取消费线程（兜底收集缓存中已有 size<=0 文件）
+                self._prefetch.start(max_workers=self.config.scan_max_workers, dir_path="")
+
                 # 执行扫描
                 _ = self._service.scan(
                     url,
@@ -150,6 +160,7 @@ class ScanController(QObject):
                 # 检查是否因超时停止
                 if self._service.is_timeout():
                     self._scan_interrupted.set()
+                    self._prefetch.cancel()
                     self.log_message.emit("扫描超时，已自动停止", "warning")
                     self.log_message.emit(
                         f"已扫描: 文件 {runner.file_count}, 目录 {runner.dir_count}（已保存）", "info"
@@ -157,8 +168,11 @@ class ScanController(QObject):
                 # 检查是否因取消停止
                 elif self._service.is_cancelled():
                     self._scan_interrupted.set()
+                    self._prefetch.cancel()
                     self.log_message.emit("扫描已取消", "warning")
                 else:
+                    # 扫描正常完成：通知预取队列结束（耗尽后自动发 completed）
+                    self._prefetch.done()
                     # 扫描进度汇总
                     if parallel:
                         self.log_message.emit(
@@ -199,6 +213,7 @@ class ScanController(QObject):
 
             except Exception as e:
                 logger.error("扫描失败", exc_info=True)
+                self._prefetch.cancel()
                 self.scan_error.emit(str(e))
                 self.log_message.emit(f"扫描失败: {e}", "error")
                 # 内部错误处理（恢复备份等）
@@ -246,6 +261,9 @@ class ScanController(QObject):
                 self._service.on_item_found = runner.handle_item
                 self._service.on_dir_scanned = runner.handle_dir_scanned
 
+                # 方案B：边扫边取——单目录刷新只预取该目录下文件
+                self._prefetch.start(max_workers=self.config.scan_max_workers, dir_path=dir_path)
+
                 self._service.scan(
                     base_url,
                     scan_mode=scan_mode,
@@ -259,7 +277,10 @@ class ScanController(QObject):
 
                 if self._service.is_timeout() or self._service.is_cancelled():
                     self._scan_interrupted.set()
+                    self._prefetch.cancel()
                     self.log_message.emit("目录刷新已取消", "warning")
+                else:
+                    self._prefetch.done()
 
                 self.scan_completed.emit(runner.file_count, runner.dir_count, dir_path)
                 logger.info("单目录扫描完成: 文件=%d 目录=%d", runner.file_count, runner.dir_count)
@@ -269,6 +290,7 @@ class ScanController(QObject):
 
             except Exception as e:
                 logger.error("目录扫描失败", exc_info=True)
+                self._prefetch.cancel()
                 self.scan_error.emit(str(e))
                 self.log_message.emit(f"目录扫描失败: {e}", "error")
             finally:
@@ -346,13 +368,15 @@ class ScanController(QObject):
                 self.cache_manager.get_tree_data_snapshot(), self.cache_manager.checked_items_snapshot()
             )
 
-            # 扫描完整 → 直接返回
+            # 扫描完整 → 直接返回（补一轮兜底大小预取）
             if self.cache_manager.is_scan_complete():
                 self.log_message.emit("=" * 50, "header")
                 self.log_message.emit("从缓存加载目录结构", "info")
                 stats = self.cache_manager.get_stats()
                 self.log_message.emit(f"文件: {stats.total_files}, 目录: {stats.total_dirs}", "info")
                 self.log_message.emit("=" * 50, "header")
+                self._prefetch.start(max_workers=self.config.scan_max_workers)
+                self._prefetch.done()
                 self.scan_completed.emit(stats.total_files, stats.total_dirs, "")
                 return
 
